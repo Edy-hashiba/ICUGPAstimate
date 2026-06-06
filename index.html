@@ -1,0 +1,2321 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GPAstimate – ICU成績予想</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body { background: #f4f6fb; min-height: 100vh; }
+    #app { max-width: 860px; margin: 0 auto; padding: 1.2rem; }
+
+    /* Course card */
+    .course-card { cursor: pointer; border: 1.5px solid #e3e8f0; border-radius: 14px; transition: box-shadow .18s, border-color .18s; background: #fff; }
+    .course-card:hover { box-shadow: 0 4px 18px rgba(80,100,180,.13); border-color: #b8c8f0; }
+
+    /* Grade badges */
+    .grade-display { font-size: 2rem; font-weight: 800; line-height: 1; }
+    .grade-A  { color: #1a56db; }
+    .grade-B  { color: #059669; }
+    .grade-C  { color: #d97706; }
+    .grade-D  { color: #dc2626; }
+    .grade-F  { color: #9f1239; }
+
+    /* Progress bar */
+    .progress-thin { height: 7px; border-radius: 4px; background: #e5e7eb; overflow: hidden; }
+    .progress-fill { height: 100%; border-radius: 4px; transition: width .4s; }
+
+    /* Prediction cards */
+    .pred-box { border-radius: 12px; padding: .8rem 1rem; }
+    .pred-trend { background: #eff6ff; border: 1.5px solid #bfdbfe; }
+    .pred-best  { background: #f0fdf4; border: 1.5px solid #bbf7d0; }
+    .pred-worst { background: #fff1f2; border: 1.5px solid #fecdd3; }
+
+    /* Navigation */
+    .nav-back { cursor: pointer; color: #6b7280; text-decoration: none; font-size: 1.05rem; font-weight: 600; padding: 6px 12px; display: inline-block; border-radius: 8px; }
+    .nav-back:hover { color: #1a56db; background: #eef2ff; }
+    /* タップしやすいボタンサイズ */
+    .btn { border-radius: 9px; }
+    .btn-sm { padding: .42rem .8rem; font-size: .9rem; }
+    @media (max-width: 768px) {
+      .btn { padding: .62rem 1.05rem; font-size: 1rem; }
+      .btn-sm { padding: .5rem .9rem; font-size: .95rem; }
+      .nav-back { font-size: 1.15rem; padding: 9px 14px; }
+    }
+
+    /* Assignment selection */
+    .assign-item { border: 1.5px solid #e5e7eb; border-radius: 10px; padding: .7rem 1rem; cursor: pointer; transition: background .15s, border-color .15s; }
+    .assign-item:hover { background: #eff6ff; border-color: #bfdbfe; }
+    .assign-item.sel { background: #dbeafe; border-color: #3b82f6; }
+
+    /* Term selector dropdown */
+    .term-dropdown { position: absolute; right: 0; top: calc(100% + 4px); background: #fff; border: 1.5px solid #e5e7eb; border-radius: 12px; padding: .5rem; min-width: 220px; box-shadow: 0 6px 20px rgba(0,0,0,.12); z-index: 200; }
+    .term-option { padding: .45rem .75rem; border-radius: 8px; cursor: pointer; }
+    .term-option:hover, .term-option.active { background: #eff6ff; }
+    .term-option.active { font-weight: 600; color: #1a56db; }
+
+    /* Toast */
+    .toast-wrap { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 9999; min-width: 240px; }
+
+    /* Misc */
+    .badge-type { font-size: .72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; }
+    .chip { display: inline-block; background: #eef2ff; color: #1e3a8a; padding: 3px 10px; border-radius: 12px; margin: 3px 5px 0 0; font-size: .82rem; cursor: pointer; }
+    .chip:hover { background: #e0e7ff; }
+    .legend-swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; vertical-align: -1px; margin-right: 3px; }
+    .section-label { font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #9ca3af; margin-bottom: .4rem; }
+    .criterion-row { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; }
+    .grade-threshold-row { display: flex; gap: 1rem; flex-wrap: wrap; font-size: .85rem; margin-top: .5rem; }
+    .ela-section { border-left: 4px solid #8b5cf6; background: #f5f3ff; border-radius: 8px; padding: .75rem 1rem; }
+    [v-cloak] { display: none !important; }
+  </style>
+</head>
+<body>
+<div id="app" v-cloak>
+
+  <!-- ===================== TOAST ===================== -->
+  <div class="toast-wrap" v-if="toast">
+    <div class="alert mb-0 shadow-sm" :class="`alert-${toast.type}`" role="alert">{{ toast.msg }}</div>
+  </div>
+
+  <!-- ===================== AUTH（クラウド設定時のみ） ===================== -->
+  <div v-if="cloudOn && !authReady" class="text-center text-muted" style="padding:4rem 1rem">
+    <div class="spinner-border text-primary mb-2"></div>
+    <div>読み込み中…</div>
+  </div>
+
+  <div v-if="cloudOn && authReady && !user" style="max-width:380px;margin:6vh auto 0">
+    <div class="text-center mb-3">
+      <h3 class="fw-bold mb-1">🎓 GPAstimate</h3>
+      <div class="text-muted small">ログインすると、どの端末でも同じデータが見られます</div>
+    </div>
+    <div class="card p-3" style="border-radius:14px">
+      <div class="mb-2">
+        <label class="form-label small">メールアドレス</label>
+        <input v-model="authEmail" type="email" class="form-control" placeholder="you@example.com"
+               @keyup.enter="authMode==='login' ? signIn() : signUp()">
+      </div>
+      <div class="mb-2">
+        <label class="form-label small">パスワード</label>
+        <input v-model="authPassword" type="password" class="form-control" placeholder="6文字以上"
+               @keyup.enter="authMode==='login' ? signIn() : signUp()">
+      </div>
+      <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" v-model="authRemember" id="rememberMe">
+        <label class="form-check-label small" for="rememberMe">この端末でのログインを省略（次回から自動ログイン）</label>
+      </div>
+      <div v-if="authError" class="alert alert-danger py-1 small mb-2">{{ authError }}</div>
+      <div v-if="authNotice" class="alert alert-success py-1 small mb-2">{{ authNotice }}</div>
+      <button class="btn btn-primary w-100" :disabled="authBusy" @click="authMode==='login' ? signIn() : signUp()">
+        <span v-if="authBusy" class="spinner-border spinner-border-sm me-1"></span>
+        {{ authMode==='login' ? 'ログイン' : '新規登録' }}
+      </button>
+      <div class="text-center mt-2 small">
+        <a href="#" @click.prevent="authMode = (authMode==='login' ? 'signup' : 'login'); authError=''; authNotice=''">
+          {{ authMode==='login' ? 'アカウントを作る' : 'ログインに戻る' }}
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== APP 本体（ログイン中／ローカルモード） ===================== -->
+  <div v-if="!cloudOn || (authReady && user)">
+
+  <!-- ===================== HOME ===================== -->
+  <div v-if="view==='home'">
+
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+      <div>
+        <h4 class="mb-0 fw-bold">🎓 GPAstimate</h4>
+        <div class="text-muted" style="font-size:.82rem">ICU 成績予想アプリ</div>
+        <div :style="{fontSize:'.72rem', color: syncBadge.color, fontWeight:600}" :title="user ? user.email : ''">{{ syncBadge.dot }} {{ syncBadge.text }}</div>
+        <div v-if="cloudOn && user" class="d-flex align-items-center gap-2 mt-1">
+          <span class="text-muted text-truncate" style="font-size:.72rem;max-width:160px">{{ user.email }}</span>
+          <button class="btn btn-outline-secondary" style="padding:1px 8px;font-size:.72rem;border-radius:8px" @click="signOut()">ログアウト</button>
+        </div>
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <button class="btn btn-outline-secondary btn-sm" @click="view='manage'">⚙ 管理</button>
+        <div class="position-relative">
+        <button class="btn btn-outline-secondary btn-sm" @click="showTermSel=!showTermSel">
+          {{ termDefs[currentTerm].name }}
+          <span class="text-muted ms-1">{{ termDefs[currentTerm].start.slice(0,7) }}〜{{ termDefs[currentTerm].end.slice(0,7) }}</span>
+          ▾
+        </button>
+        <div class="term-dropdown" v-if="showTermSel">
+          <div v-for="(d,k) in termDefs" :key="k" class="term-option" :class="{active:currentTerm===k}"
+               @click="currentTerm=k; showTermSel=false; saveData()">
+            <div>{{ d.name }}</div>
+            <div style="font-size:.78rem;color:#6b7280">{{ d.start }} 〜 {{ d.end }}（{{ d.weeks }}週）</div>
+          </div>
+        </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- GPA Summary Card -->
+    <div class="card mb-3" style="border-radius:16px;border:none;background:linear-gradient(135deg,#1a56db 0%,#3b82f6 100%);">
+      <div class="card-body text-white text-center py-3">
+        <div style="font-size:.85rem;opacity:.85">{{ termDefs[currentTerm].name }} 予想 GPA</div>
+        <div v-if="overallPredictedGPA !== null" style="font-size:3rem;font-weight:800;line-height:1.1">{{ overallPredictedGPA }}</div>
+        <div v-else style="font-size:1.2rem;opacity:.7">成績データなし</div>
+        <div style="font-size:.78rem;opacity:.7">登録授業 {{ currentTermCourses.length }} 件 · 単位（週コマ数）加重平均</div>
+        <div v-if="overallPredictedGPAPooled !== null" style="font-size:.8rem;opacity:.95;margin-top:5px;border-top:1px solid rgba(255,255,255,.25);padding-top:5px">
+          想定予想GPA（未入力=65%）: <strong>{{ overallPredictedGPAPooled }}</strong>
+        </div>
+      </div>
+    </div>
+
+    <!-- ELA Cross-Term (if any ELA courses exist) -->
+    <div v-if="elaCourses.length > 0" class="ela-section mb-3">
+      <div class="section-label">ELA 年間予想成績</div>
+      <div class="d-flex align-items-center gap-3 flex-wrap">
+        <div v-for="tc in ['spring','autumn','winter']" :key="tc">
+          <span class="text-muted small">{{ termDefs[tc].name }}:</span>
+          <strong class="ms-1">{{ elaTermAvgGrade(tc) || '―' }}</strong>
+        </div>
+        <div class="ms-auto">
+          <span class="text-muted small">年間平均GPA: </span>
+          <strong class="text-purple" style="color:#7c3aed">{{ elaYearGPA || '―' }}</strong>
+        </div>
+      </div>
+    </div>
+
+    <!-- Course List -->
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <div class="section-label mb-0">登録授業</div>
+      <button class="btn btn-primary btn-sm" @click="openAddCourse()">＋ 授業を追加</button>
+    </div>
+
+    <div v-if="currentTermCourses.length===0" class="text-center py-5 text-muted">
+      <div style="font-size:3.5rem">📚</div>
+      <div class="mb-3">授業がまだ登録されていません</div>
+      <button class="btn btn-primary" @click="openAddCourse()">最初の授業を追加する</button>
+    </div>
+
+    <div v-for="c in visibleCourses()" :key="c.id" class="course-card p-3 mb-2" @click="openDetail(c)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div class="flex-grow-1 me-2">
+          <div class="d-flex align-items-center gap-2 mb-1">
+            <span class="badge-type text-white" :class="typeColor(c.type)" style="border-radius:6px">{{ c.type }}</span>
+            <span class="fw-semibold">{{ c.name }}</span>
+          </div>
+          <div class="text-muted" style="font-size:.82rem">
+            {{ teacherText(c) || '担当未設定' }}{{ roomText(c) ? ' · ' + roomText(c) : '' }}
+            · {{ totalClasses(c) }}コマ/学期
+          </div>
+          <!-- Progress bar -->
+          <div class="mt-2" v-if="coveredWeight(c) > 0">
+            <div class="d-flex justify-content-between mb-1" style="font-size:.78rem;color:#9ca3af">
+              <span>評価済み {{ coveredWeight(c).toFixed(0) }}%</span>
+              <span>獲得 {{ earnedSoFar(c).toFixed(1) }}点</span>
+            </div>
+            <div class="progress-thin">
+              <div class="progress-fill" :class="fillColor(predictedScore(c))" :style="{width: coveredWeight(c)+'%'}"></div>
+            </div>
+          </div>
+        </div>
+        <!-- Grade display -->
+        <div class="text-end" style="min-width:60px">
+          <div v-if="predictedScore(c) !== null">
+            <div class="grade-display" :class="gradeColor(scoreToGrade(predictedScore(c), c)?.grade)">
+              {{ scoreToGrade(predictedScore(c), c)?.grade || '―' }}
+            </div>
+            <div style="font-size:.8rem;color:#9ca3af">{{ predictedScore(c).toFixed(1) }}%</div>
+          </div>
+          <div v-else class="text-muted" style="font-size:.8rem">データなし</div>
+        </div>
+      </div>
+      <!-- Action buttons -->
+      <div class="mt-2 d-flex gap-2" @click.stop>
+        <button class="btn btn-sm btn-outline-primary" @click="openAddGrade(c)">📝 成績追加</button>
+        <button v-if="c.attendanceMatters" class="btn btn-sm btn-outline-secondary" @click="openDetail(c)">📅 出席</button>
+      </div>
+    </div>
+    <div v-if="currentTermCourses.length > listLimit" class="text-center mb-2">
+      <button class="btn btn-sm btn-link" @click="seeAllCourses=!seeAllCourses">
+        {{ seeAllCourses ? 'see less ▲' : 'see more（残り ' + (currentTermCourses.length - listLimit) + ' 件）▼' }}
+      </button>
+    </div>
+  </div>
+
+  <!-- ===================== MANAGE: teacher / classroom ===================== -->
+  <div v-if="view==='manage'">
+    <div class="d-flex align-items-center gap-2 mb-3">
+      <a class="nav-back" @click="view='home'">← 戻る</a>
+      <h5 class="mb-0 fw-bold">⚙ 設定・管理</h5>
+    </div>
+
+    <div v-if="cloudOn" class="card p-3 mb-3" style="border-radius:14px">
+      <div class="section-label">アカウント</div>
+      <div class="d-flex justify-content-between align-items-center">
+        <div class="small"><span class="text-muted">ログイン中:</span> <strong>{{ user && user.email }}</strong></div>
+        <button class="btn btn-sm btn-outline-danger" @click="signOut()">ログアウト</button>
+      </div>
+      <div class="small text-muted mt-1">同じアカウントでログインすれば、どの端末でも同じデータが見られます。</div>
+    </div>
+
+    <div class="text-muted small mb-3">ここで登録した名前が、授業の追加/編集の「担当教師」「教室」欄に候補として表示されます。</div>
+    <div class="row g-3">
+      <div class="col-md-6">
+        <div class="card p-3" style="border-radius:14px">
+          <div class="section-label">担当教師（{{ teacherMaster.length }}）</div>
+          <div class="d-flex gap-2 mb-2">
+            <input v-model="manageNewTeacher" class="form-control form-control-sm" placeholder="教師名を追加" @keyup.enter="addTeacherManual()">
+            <button class="btn btn-sm btn-primary" @click="addTeacherManual()">追加</button>
+          </div>
+          <div v-if="teacherMaster.length===0" class="text-muted small text-center py-2">まだ登録がありません</div>
+          <div v-for="(t,i) in teacherMaster" :key="'t'+i" class="d-flex gap-2 align-items-center mb-1">
+            <input v-model="teacherMaster[i]" @change="saveData()" class="form-control form-control-sm">
+            <button class="btn btn-sm btn-outline-danger" @click="teacherMaster.splice(i,1); saveData()">✕</button>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-6">
+        <div class="card p-3" style="border-radius:14px">
+          <div class="section-label">教室（{{ roomMaster.length }}）</div>
+          <div class="d-flex gap-2 mb-2">
+            <input v-model="manageNewRoom" class="form-control form-control-sm" placeholder="教室を追加" @keyup.enter="addRoomManual()">
+            <button class="btn btn-sm btn-primary" @click="addRoomManual()">追加</button>
+          </div>
+          <div v-if="roomMaster.length===0" class="text-muted small text-center py-2">まだ登録がありません</div>
+          <div v-for="(r,i) in roomMaster" :key="'r'+i" class="d-flex gap-2 align-items-center mb-1">
+            <input v-model="roomMaster[i]" @change="saveData()" class="form-control form-control-sm">
+            <button class="btn btn-sm btn-outline-danger" @click="roomMaster.splice(i,1); saveData()">✕</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="text-muted small mt-3">※ 候補名を書き換えても、すでに登録済みの授業の値は変わりません（候補リストのみ更新されます）。</div>
+  </div>
+
+  <!-- ===================== ADD / EDIT COURSE ===================== -->
+  <div v-if="view==='addCourse'">
+    <div class="d-flex align-items-center gap-2 mb-3">
+      <a class="nav-back" @click="view='home'">← 戻る</a>
+      <h5 class="mb-0 fw-bold">{{ courseForm.id ? '授業を編集' : '授業を追加' }}</h5>
+    </div>
+
+    <!-- Basic Info -->
+    <div class="card p-3 mb-3" style="border-radius:14px">
+      <div class="section-label">基本情報</div>
+      <div class="row g-2">
+        <div class="col-md-6">
+          <label class="form-label">授業名 <span class="text-danger">*</span></label>
+          <input v-model="courseForm.name" class="form-control" placeholder="例: Academic Reading & Writing">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">科目種別</label>
+          <select v-model="courseForm.type" class="form-select">
+            <option v-for="t in courseTypes" :key="t">{{ t }}</option>
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">ターム</label>
+          <select v-model="courseForm.term" class="form-select">
+            <option v-for="(d,k) in termDefs" :key="k" :value="k">{{ d.name }}</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">担当教師（複数可）</label>
+          <div class="d-flex gap-2">
+            <input v-model="newTeacherInput" class="form-control" list="teacherMasterList" placeholder="入力/選択して ＋" @keyup.enter.prevent="addTeacherToCourse()">
+            <button type="button" class="btn btn-outline-primary" @click="addTeacherToCourse()">＋</button>
+          </div>
+          <datalist id="teacherMasterList">
+            <option v-for="t in teacherMaster" :key="t" :value="t"></option>
+          </datalist>
+          <div class="mt-1">
+            <span v-for="(t,i) in courseForm.teachers" :key="i" class="chip" @click="courseForm.teachers.splice(i,1)">{{ t }} ✕</span>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">教室（複数可）</label>
+          <div class="d-flex gap-2">
+            <input v-model="newRoomInput" class="form-control" list="roomMasterList" placeholder="入力/選択して ＋" @keyup.enter.prevent="addRoomToCourse()">
+            <button type="button" class="btn btn-outline-primary" @click="addRoomToCourse()">＋</button>
+          </div>
+          <datalist id="roomMasterList">
+            <option v-for="r in roomMaster" :key="r" :value="r"></option>
+          </datalist>
+          <div class="mt-1">
+            <span v-for="(r,i) in courseForm.classrooms" :key="i" class="chip" @click="courseForm.classrooms.splice(i,1)">{{ r }} ✕</span>
+          </div>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">週コマ数</label>
+          <input v-model.number="courseForm.weeklyClasses" type="number" min="1" max="10" class="form-control">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">週数（任意）</label>
+          <input v-model.number="courseForm.weeksOverride" type="number" min="1" max="20" class="form-control" :placeholder="(termDefs[courseForm.term]?.weeks||'')+'（暦）'">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">総授業回数（任意・直接）</label>
+          <input v-model.number="courseForm.totalClassesOverride" type="number" min="1" class="form-control" placeholder="分かれば直接入力">
+        </div>
+        <div class="col-12">
+          <div class="text-muted" style="font-size:.85rem">
+            → このタームの授業数: 計 <strong>{{ totalClasses(courseForm) }}</strong> 回
+            <span style="font-size:.8rem">（{{ totalClassesSource(courseForm) }}）</span>
+          </div>
+        </div>
+        <div class="col-12">
+          <label class="form-label">授業の曜日（カレンダー出席管理に使用・任意）</label>
+          <div class="d-flex gap-1 flex-wrap">
+            <button v-for="(lbl,i) in weekdayLabels" :key="i" type="button"
+              class="btn btn-sm" :class="(courseForm.meetingDays||[]).includes(i) ? 'btn-primary' : 'btn-outline-secondary'"
+              @click="toggleMeetingDay(i)">{{ lbl }}</button>
+          </div>
+          <div class="form-text">選んだ曜日 × 学年暦の期間 で各授業日を自動生成し、出席を日付ごとに記録できます（空欄なら従来の手入力カウント）。週コマ数（{{ courseForm.weeklyClasses }}）と数を合わせると正確です。</div>
+        </div>
+        <div class="col-12">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" v-model="courseForm.attendanceMatters" id="attCheck">
+            <label class="form-check-label" for="attCheck">出席が評価に影響する</label>
+          </div>
+          <div v-if="courseForm.attendanceAuto" class="form-text mt-1" :class="courseForm.attendanceUncertain ? 'text-warning' : ''" style="font-size:.78rem">
+            {{ courseForm.attendanceUncertain ? '⚠ 要確認:' : '🤖 シラバスから自動判定:' }} {{ courseForm.attendanceAuto }}
+            <span v-if="courseForm.attendanceUncertain">（出席を含むかチェックを確認してください）</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Syllabus auto-read -->
+    <div class="card p-3 mb-3" style="border-radius:14px;border:1.5px solid #c7d2fe;background:#f8faff">
+      <div class="section-label">📄 シラバス自動読み取り</div>
+      <div class="text-muted small mb-2">
+        シラバスを貼る／アップロードすると、<strong>成績基準・出席の有無・成績cutoff</strong>を自動抽出して下の各欄に反映します。反映後に確認・修正してから保存してください。
+      </div>
+      <div class="btn-group btn-group-sm mb-2" role="group">
+        <button type="button" class="btn" :class="syllabusInput==='text'?'btn-primary':'btn-outline-primary'" @click="syllabusInput='text'">テキスト</button>
+        <button type="button" class="btn" :class="syllabusInput==='pdf'?'btn-primary':'btn-outline-primary'" @click="syllabusInput='pdf'">PDF</button>
+        <button type="button" class="btn" :class="syllabusInput==='image'?'btn-primary':'btn-outline-primary'" @click="syllabusInput='image'">画像</button>
+      </div>
+
+      <div v-if="syllabusInput==='text'">
+        <textarea v-model="courseForm.syllabusText" class="form-control form-control-sm" rows="5"
+          placeholder="シラバスの Grading / Evaluation 部分を貼り付け&#10;例:&#10;Homework: 20%&#10;Attendance &amp; Participation: 10%&#10;Midterm Exam: 30%&#10;Final Project: 40%&#10;&#10;Grading scale: A 90-100, B 80-89, C 70-79, D 60-69, E 0-59"></textarea>
+      </div>
+      <div v-else-if="syllabusInput==='pdf'">
+        <input type="file" accept="application/pdf,.pdf" class="form-control form-control-sm" @change="onSyllabusFile($event,'pdf')">
+        <div class="form-text">文字が埋め込まれたPDFに対応（スキャン画像PDFは精度が落ちます）。</div>
+        <textarea v-if="courseForm.syllabusText" v-model="courseForm.syllabusText" class="form-control form-control-sm mt-2" rows="4"></textarea>
+      </div>
+      <div v-else>
+        <input type="file" accept="image/*" class="form-control form-control-sm" @change="onSyllabusFile($event,'image')">
+        <div class="form-text">写真・スクショからOCRで文字起こし（初回は辞書DLに時間／日本語は精度が落ちることがあります）。</div>
+        <textarea v-if="courseForm.syllabusText" v-model="courseForm.syllabusText" class="form-control form-control-sm mt-2" rows="4"></textarea>
+      </div>
+
+      <div class="d-flex align-items-center gap-2 mt-2">
+        <button type="button" class="btn btn-sm btn-primary" :disabled="syllabusBusy" @click="runSyllabusAnalysis()">
+          <span v-if="syllabusBusy" class="spinner-border spinner-border-sm me-1"></span>
+          {{ syllabusBusy ? '処理中…' : '🔍 解析して反映' }}
+        </button>
+        <span class="small text-muted">{{ syllabusStatus }}</span>
+      </div>
+    </div>
+
+    <!-- Grade Scale (cutoff) -->
+    <div class="card p-3 mb-3" style="border-radius:14px">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="section-label mb-0">成績スケール（cutoff）</div>
+        <div class="form-check form-switch mb-0">
+          <input class="form-check-input" type="checkbox" v-model="courseForm.useCustomScale" id="customScale">
+          <label class="form-check-label small" for="customScale">シラバス独自の基準を使う</label>
+        </div>
+      </div>
+      <div v-if="!courseForm.useCustomScale" class="text-muted small">
+        標準スケール: <strong>A</strong> 90+ ・ <strong>B</strong> 80+ ・ <strong>C</strong> 70+ ・ <strong>D</strong> 60+ ・ <strong>E</strong> 0+
+      </div>
+      <div v-else>
+        <div class="text-muted small mb-2">各グレードの下限点を入力（その点数以上でそのグレード）。シラバスに記載があればそれを入力してください。</div>
+        <div class="row g-2">
+          <div class="col" v-for="g in ['A','B','C','D']" :key="g">
+            <label class="form-label small mb-1">{{ g }} は…点以上</label>
+            <div class="input-group input-group-sm">
+              <input type="number" min="0" max="100" v-model.number="courseForm.gradeCutoffs[g]" class="form-control">
+              <span class="input-group-text">点</span>
+            </div>
+          </div>
+          <div class="col">
+            <label class="form-label small mb-1">E</label>
+            <div class="input-group input-group-sm">
+              <input type="number" class="form-control" value="0" disabled>
+              <span class="input-group-text">点</span>
+            </div>
+          </div>
+        </div>
+        <div v-if="!cutoffsValid" class="alert alert-warning small py-1 mt-2 mb-0">
+          ⚠ 下限点は A &gt; B &gt; C &gt; D の順に大きくしてください
+        </div>
+      </div>
+      <hr class="my-2">
+      <div class="form-check">
+        <input class="form-check-input" type="checkbox" v-model="courseForm.roundGrade" id="roundGrade">
+        <label class="form-check-label small" for="roundGrade">合計点を四捨五入して判定する（シラバスに四捨五入の指示がある場合のみ）</label>
+      </div>
+      <div class="text-muted" style="font-size:.75rem;margin-top:2px">
+        {{ courseForm.roundGrade ? 'ON: 合計 89.5% → 90 に四捨五入 → A' : 'OFF: 厳密cutoff（89.9% は B）' }}
+      </div>
+    </div>
+
+    <!-- Grading Criteria -->
+    <div class="card p-3 mb-3" style="border-radius:14px">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="section-label mb-0">Grading Criteria（成績基準）</div>
+        <div class="d-flex align-items-center gap-2">
+          <span class="small" :class="criteriaTotalOk ? 'text-success fw-semibold' : 'text-danger fw-semibold'">
+            合計 {{ criteriaTotal.toFixed(0) }}%
+          </span>
+          <button class="btn btn-sm btn-outline-primary" @click="addCriterion(courseForm)">＋</button>
+        </div>
+      </div>
+
+      <div v-if="courseForm.gradingCriteria.length===0" class="text-muted small text-center py-2">
+        まだ基準が追加されていません
+      </div>
+      <div v-for="(c,i) in courseForm.gradingCriteria" :key="c.id" class="criterion-row">
+        <input v-model="c.name" class="form-control form-control-sm flex-grow-1" placeholder="例: Homework">
+        <div class="input-group input-group-sm" style="width:110px">
+          <input v-model.number="c.percentage" type="number" min="0" max="100" class="form-control">
+          <span class="input-group-text">%</span>
+        </div>
+        <button class="btn btn-sm btn-outline-danger" @click="courseForm.gradingCriteria.splice(i,1)">✕</button>
+      </div>
+      <div v-if="courseForm.gradingCriteria.length>0 && !criteriaTotalOk" class="alert alert-warning small py-1 mt-2 mb-0">
+        ⚠ 合計が100%になるよう調整してください（現在 {{ criteriaTotal.toFixed(0) }}%）
+      </div>
+    </div>
+
+    <!-- Pre-registered Assignments -->
+    <div class="card p-3 mb-3" style="border-radius:14px">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="section-label mb-0">事前登録課題（任意）</div>
+        <button class="btn btn-sm btn-outline-primary" @click="addAssignment(courseForm)">＋</button>
+      </div>
+      <div v-if="courseForm.assignments.length===0" class="text-muted small text-center py-2">まだ課題が登録されていません</div>
+      <div v-for="(a,i) in courseForm.assignments" :key="a.id" class="border rounded p-2 mb-2">
+        <div class="row g-1">
+          <div class="col-md-4">
+            <input v-model="a.name" class="form-control form-control-sm" placeholder="課題名">
+          </div>
+          <div class="col-md-3">
+            <select v-model="a.criterionId" class="form-select form-select-sm">
+              <option value="">― 基準を選択 ―</option>
+              <option v-for="cr in courseForm.gradingCriteria" :key="cr.id" :value="cr.id">{{ cr.name }}</option>
+            </select>
+          </div>
+          <div class="col-md-2">
+            <input type="date" v-model="a.deadline" class="form-control form-control-sm">
+          </div>
+          <div class="col-md-2">
+            <div class="input-group input-group-sm">
+              <input v-model.number="a.maxScore" type="number" class="form-control" placeholder="100">
+              <span class="input-group-text">点</span>
+            </div>
+          </div>
+          <div class="col-md-1 d-flex align-items-center">
+            <button class="btn btn-sm btn-outline-danger" @click="courseForm.assignments.splice(i,1)">✕</button>
+          </div>
+          <div class="col-12">
+            <input v-model="a.memo" class="form-control form-control-sm" placeholder="メモ（任意）">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="d-flex gap-2 mb-5">
+      <button class="btn btn-primary" @click="saveCourse()">💾 保存</button>
+      <button class="btn btn-outline-secondary" @click="view='home'">キャンセル</button>
+      <button v-if="courseForm.id" class="btn btn-outline-danger ms-auto" @click="deleteCourse()">🗑 削除</button>
+    </div>
+  </div>
+
+  <!-- ===================== COURSE DETAIL ===================== -->
+  <div v-if="view==='detail' && selectedCourse">
+    <div class="d-flex align-items-center justify-content-between mb-3">
+      <div class="d-flex align-items-center gap-2">
+        <a class="nav-back" @click="view='home'">← 戻る</a>
+        <h5 class="mb-0 fw-bold">{{ selectedCourse.name }}</h5>
+      </div>
+      <button class="btn btn-sm btn-outline-secondary" @click="openEditCourse(selectedCourse)">✏ 編集</button>
+    </div>
+
+    <!-- Course meta -->
+    <div class="card p-3 mb-3" style="border-radius:14px">
+      <div class="row g-1 text-center">
+        <div class="col-3">
+          <div class="section-label">種別</div>
+          <span class="badge-type text-white" :class="typeColor(selectedCourse.type)" style="border-radius:6px">{{ selectedCourse.type }}</span>
+        </div>
+        <div class="col-3">
+          <div class="section-label">担当</div>
+          <div style="font-size:.9rem">{{ teacherText(selectedCourse) || '―' }}</div>
+        </div>
+        <div class="col-3">
+          <div class="section-label">教室</div>
+          <div style="font-size:.9rem">{{ roomText(selectedCourse) || '―' }}</div>
+        </div>
+        <div class="col-3">
+          <div class="section-label">授業数</div>
+          <div style="font-size:.9rem">{{ totalClasses(selectedCourse) }}コマ</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Grade Prediction -->
+    <div class="card p-3 mb-3" style="border-radius:14px">
+      <div class="section-label">📊 成績予想</div>
+      <div v-if="selectedCourse.roundGrade" class="text-muted mb-2" style="font-size:.74rem">※ 合計点を四捨五入して成績判定（シラバス指示）</div>
+
+      <div v-if="predictedScore(selectedCourse) !== null || pooledScore(selectedCourse) !== null">
+        <div class="row g-2 mb-3">
+          <!-- Trend -->
+          <div class="col-6 col-md-3" v-if="predictedScore(selectedCourse) !== null">
+            <div class="pred-box pred-trend h-100">
+              <div style="font-size:.78rem;color:#6b7280;margin-bottom:.2rem">📈 トレンド予想</div>
+              <div class="fw-bold" style="font-size:1.8rem" :class="gradeColor(scoreToGrade(predictedScore(selectedCourse), selectedCourse)?.grade)">
+                {{ scoreToGrade(predictedScore(selectedCourse), selectedCourse)?.grade }}
+              </div>
+              <div style="font-size:.85rem;color:#374151">{{ predictedScore(selectedCourse).toFixed(1) }}%</div>
+              <div style="font-size:.75rem;color:#9ca3af">現在の得点率で残りを推定</div>
+            </div>
+          </div>
+          <!-- Best -->
+          <div class="col-6 col-md-3" v-if="predictedScore(selectedCourse) !== null">
+            <div class="pred-box pred-best h-100">
+              <div style="font-size:.78rem;color:#6b7280;margin-bottom:.2rem">🌟 最高予想</div>
+              <div class="fw-bold" style="font-size:1.8rem" :class="gradeColor(scoreToGrade(bestCase(selectedCourse), selectedCourse)?.grade)">
+                {{ scoreToGrade(bestCase(selectedCourse), selectedCourse)?.grade }}
+              </div>
+              <div style="font-size:.85rem;color:#374151">{{ bestCase(selectedCourse).toFixed(1) }}%</div>
+              <div style="font-size:.75rem;color:#9ca3af">残り全て満点の場合</div>
+            </div>
+          </div>
+          <!-- Worst -->
+          <div class="col-6 col-md-3" v-if="predictedScore(selectedCourse) !== null">
+            <div class="pred-box pred-worst h-100">
+              <div style="font-size:.78rem;color:#6b7280;margin-bottom:.2rem">⚠ 最低予想</div>
+              <div class="fw-bold" style="font-size:1.8rem" :class="gradeColor(scoreToGrade(worstCase(selectedCourse), selectedCourse)?.grade)">
+                {{ scoreToGrade(worstCase(selectedCourse), selectedCourse)?.grade }}
+              </div>
+              <div style="font-size:.85rem;color:#374151">{{ worstCase(selectedCourse).toFixed(1) }}%</div>
+              <div style="font-size:.75rem;color:#9ca3af">残り全て0点の場合</div>
+            </div>
+          </div>
+          <!-- 想定予想（プール方式・未入力=65%） -->
+          <div class="col-6 col-md-3" v-if="pooledScore(selectedCourse) !== null">
+            <div class="pred-box h-100" style="background:#fffbeb;border:1px solid #fde68a">
+              <div style="font-size:.78rem;color:#92400e;margin-bottom:.2rem">📐 想定予想</div>
+              <div class="fw-bold" style="font-size:1.8rem" :class="gradeColor(scoreToGrade(pooledScore(selectedCourse), selectedCourse)?.grade)">
+                {{ scoreToGrade(pooledScore(selectedCourse), selectedCourse)?.grade }}
+              </div>
+              <div style="font-size:.85rem;color:#374151">{{ pooledScore(selectedCourse).toFixed(1) }}%</div>
+              <div style="font-size:.75rem;color:#b45309">未入力は65%と仮定</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cumulative + thresholds（実績ベースの予想がある時のみ） -->
+        <div v-if="predictedScore(selectedCourse) !== null">
+          <div class="bg-light rounded p-2 mb-2" style="font-size:.85rem">
+            <strong>現在の獲得ポイント: {{ earnedSoFar(selectedCourse).toFixed(1) }}点</strong>
+            <span class="text-muted ms-2">（評価済み {{ coveredWeight(selectedCourse).toFixed(0) }}% 分）</span>
+          </div>
+          <div class="grade-threshold-row">
+            <span class="text-muted" style="font-size:.8rem">あと何点で…</span>
+            <span v-for="tg in ['A','B','C','D']" :key="tg" style="font-size:.82rem">
+              <span class="text-muted">{{ tg }}:</span>
+              <strong class="ms-1" :class="neededFor(selectedCourse,tg) <= 0 ? 'text-success' : ''">
+                {{ neededForStr(selectedCourse, tg) }}
+              </strong>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div v-else class="text-center text-muted py-3">
+        <div style="font-size:2rem">📝</div>
+        成績を追加すると予想が表示されます
+      </div>
+    </div>
+
+    <!-- Grading Criteria -->
+    <div class="card p-3 mb-3" style="border-radius:14px">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="section-label mb-0">Grading Criteria</div>
+        <button class="btn btn-sm btn-outline-secondary" @click="editCriteria=!editCriteria">
+          {{ editCriteria ? '✓ 完了' : '✏ 編集' }}
+        </button>
+      </div>
+
+      <!-- View mode -->
+      <div v-if="!editCriteria">
+        <div v-if="selectedCourse.gradingCriteria.length" class="mb-3 p-2 rounded" style="background:#f8fafc;font-size:.72rem;color:#6b7280">
+          <div class="mb-1">バーの<strong>幅</strong> = 配点(%)、<strong>色</strong> = その項目の得点率の水準</div>
+          <div class="d-flex flex-wrap gap-2">
+            <span><span class="legend-swatch bg-primary"></span>A相当 90%+</span>
+            <span><span class="legend-swatch bg-success"></span>B相当 80%+</span>
+            <span><span class="legend-swatch bg-warning"></span>C相当 70%+</span>
+            <span><span class="legend-swatch bg-info"></span>D相当 60%+</span>
+            <span><span class="legend-swatch bg-danger"></span>E相当 60%未満</span>
+            <span><span class="legend-swatch bg-secondary"></span>未評価（成績未入力）</span>
+          </div>
+        </div>
+        <div v-for="cr in selectedCourse.gradingCriteria" :key="cr.id" class="mb-2">
+          <div class="d-flex justify-content-between align-items-center mb-1" style="font-size:.87rem">
+            <span>{{ cr.name }}</span>
+            <div class="d-flex align-items-center gap-2">
+              <span class="fw-semibold">{{ cr.percentage }}%</span>
+              <button class="btn" :class="isCriterionComplete(selectedCourse,cr.id)?'btn-success':'btn-outline-secondary'"
+                      style="padding:1px 8px;font-size:.7rem;border-radius:10px"
+                      @click="toggleCriterionComplete(selectedCourse, cr.id)">
+                {{ isCriterionComplete(selectedCourse,cr.id) ? '✓ 完了' : 'すべて完了' }}
+              </button>
+            </div>
+          </div>
+          <div class="progress-thin">
+            <div class="progress-fill" :class="criterionBarColor(selectedCourse,cr.id)"
+                 :style="{width: cr.percentage+'%'}"></div>
+          </div>
+          <div v-if="criterionRate(selectedCourse,cr.id) !== null" style="font-size:.78rem;color:#6b7280;margin-top:2px">
+            得点率 {{ (criterionRate(selectedCourse,cr.id)*100).toFixed(1) }}%
+            → <strong>{{ (cr.percentage * criterionRate(selectedCourse,cr.id)).toFixed(2) }}点</strong> 獲得
+          </div>
+        </div>
+        <div v-if="selectedCourse.gradingCriteria.length===0" class="text-muted small text-center py-2">
+          成績基準が設定されていません
+        </div>
+      </div>
+
+      <!-- Edit mode -->
+      <div v-if="editCriteria">
+        <div v-for="(cr,i) in selectedCourse.gradingCriteria" :key="cr.id" class="criterion-row">
+          <input v-model="cr.name" class="form-control form-control-sm flex-grow-1">
+          <div class="input-group input-group-sm" style="width:110px">
+            <input v-model.number="cr.percentage" type="number" min="0" max="100" class="form-control">
+            <span class="input-group-text">%</span>
+          </div>
+          <button class="btn btn-sm btn-outline-danger" @click="selectedCourse.gradingCriteria.splice(i,1)">✕</button>
+        </div>
+        <button class="btn btn-sm btn-outline-primary mt-1" @click="addCriterion(selectedCourse)">＋ 追加</button>
+        <div class="mt-2">
+          <span class="small" :class="selCriteriaOk ? 'text-success' : 'text-danger'">
+            合計 {{ selCriteriaTotal.toFixed(0) }}%
+          </span>
+        </div>
+        <button class="btn btn-primary btn-sm mt-2" @click="saveCriteriaEdit()">保存</button>
+        <div v-if="!selCriteriaOk" class="alert alert-warning small py-1 mt-2">
+          ⚠ 合計が100%になるよう調整してください
+        </div>
+      </div>
+    </div>
+
+    <!-- Grades List -->
+    <div class="card p-3 mb-3" style="border-radius:14px">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="section-label mb-0">成績一覧 <span class="badge bg-secondary ms-1">{{ selectedCourse.grades.length }}</span></div>
+        <button class="btn btn-sm btn-primary" @click="openAddGrade(selectedCourse)">＋ 成績追加</button>
+      </div>
+
+      <div v-if="selectedCourse.grades.length===0" class="text-muted small text-center py-3">
+        まだ成績が記録されていません
+      </div>
+
+      <div v-for="g in visibleGrades(selectedCourse)" :key="g.id" class="border rounded p-2 mb-2">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <div class="fw-semibold">{{ g.name }}</div>
+            <div style="font-size:.8rem;color:#6b7280">
+              {{ criterionName(selectedCourse, g.criterionId) }}
+              <span v-if="g.date"> · {{ g.date }}</span>
+            </div>
+            <div v-if="g.memo" style="font-size:.8rem;color:#4b5563;margin-top:2px">💬 {{ g.memo }}</div>
+          </div>
+          <div class="text-end">
+            <div class="fw-bold">{{ g.actualScore }} / {{ g.maxScore }}</div>
+            <div style="font-size:.82rem" :class="rateColor(g.actualScore/g.maxScore)">
+              {{ (g.actualScore/g.maxScore*100).toFixed(1) }}%
+            </div>
+            <button class="btn btn-sm btn-link text-danger p-0 mt-1" @click="deleteGrade(selectedCourse, g.id)">削除</button>
+          </div>
+        </div>
+      </div>
+      <div v-if="sortedGrades(selectedCourse).length > listLimit" class="text-center">
+        <button class="btn btn-sm btn-link" @click="seeAllGrades=!seeAllGrades">
+          {{ seeAllGrades ? 'see less ▲' : 'see more（残り ' + (sortedGrades(selectedCourse).length - listLimit) + ' 件）▼' }}
+        </button>
+      </div>
+    </div>
+
+    <!-- Attendance (only if matters) -->
+    <div class="card p-3 mb-4" v-if="selectedCourse.attendanceMatters" style="border-radius:14px">
+      <div class="section-label">📅 出席管理</div>
+
+      <!-- 授業カレンダー（曜日を設定した授業のみ）-->
+      <div v-if="(selectedCourse.meetingDays||[]).length" class="mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <div class="small text-muted">授業カレンダー（全 {{ courseSessions(selectedCourse).length }} 回）</div>
+          <div class="small">欠 <strong class="text-danger">{{ selectedCourse.absences }}</strong> ・ 遅 <strong class="text-warning">{{ selectedCourse.lates }}</strong> ・ 休 <strong class="text-secondary">{{ selectedCourse.cancelledClasses }}</strong></div>
+        </div>
+        <div style="max-height:280px;overflow:auto" class="border rounded p-2">
+          <div v-for="d in courseSessions(selectedCourse)" :key="d"
+               class="d-flex justify-content-between align-items-center py-1"
+               :style="{opacity: d > todayStr ? 0.5 : 1}">
+            <div class="small">
+              {{ fmtSessionLabel(d) }}
+              <span v-if="d===todayStr" class="badge bg-primary ms-1" style="font-size:.6rem">今日</span>
+            </div>
+            <div class="btn-group btn-group-sm">
+              <button v-for="opt in sessionOpts" :key="opt.v" type="button"
+                class="btn" :class="sessionStatusOf(selectedCourse,d)===opt.v ? opt.cls : 'btn-outline-secondary'"
+                style="padding:1px 9px;font-size:.72rem"
+                @click="setSessionStatus(selectedCourse, d, opt.v)">{{ opt.label }}</button>
+            </div>
+          </div>
+        </div>
+        <div class="form-text">出=出席 / 遅=遅刻 / 欠=欠席 / 休=休講（初期値は出席）。欠席・遅刻・休講の数は自動集計され、下の予想に反映されます。</div>
+      </div>
+
+      <!-- 段階式：シラバスに指示がある授業のみ -->
+      <div v-if="selectedCourse.attendanceScale">
+        <div class="alert alert-info py-2 small mb-3">
+          シラバスの<strong>段階式出席配点</strong>です。欠席・遅刻から
+          <strong>{{ criterionName(selectedCourse, selectedCourse.attendanceScale.criterionId) }}</strong>
+          （{{ criterionById(selectedCourse, selectedCourse.attendanceScale.criterionId)?.percentage }}%）の獲得点を自動計算し、成績予想に反映します。
+        </div>
+        <div class="row g-2 mb-2" v-if="!(selectedCourse.meetingDays||[]).length">
+          <div class="col-md-4">
+            <label class="form-label small">欠席数（累計）</label>
+            <input type="number" min="0" v-model.number="selectedCourse.absences" class="form-control form-control-sm">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">遅刻数（累計）</label>
+            <input type="number" min="0" v-model.number="selectedCourse.lates" class="form-control form-control-sm">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">休講数（累計）</label>
+            <input type="number" min="0" v-model.number="selectedCourse.cancelledClasses" class="form-control form-control-sm">
+          </div>
+        </div>
+        <div class="row g-2 text-center mb-2">
+          <div class="col-4">
+            <div style="font-size:.75rem;color:#9ca3af">換算欠席</div>
+            <div class="fw-bold fs-5">{{ effectiveAbsences(selectedCourse) }}</div>
+            <div v-if="selectedCourse.attendanceScale.lateToAbsence" style="font-size:.7rem;color:#9ca3af">
+              遅刻{{ selectedCourse.attendanceScale.lateToAbsence }}回 = 欠席1回
+            </div>
+          </div>
+          <div class="col-4">
+            <div style="font-size:.75rem;color:#9ca3af">獲得点</div>
+            <div class="fw-bold fs-5 text-primary">{{ attendanceScalePoints(selectedCourse)?.toFixed(1) }}%</div>
+            <div style="font-size:.7rem;color:#9ca3af">/ {{ criterionById(selectedCourse, selectedCourse.attendanceScale.criterionId)?.percentage }}%</div>
+          </div>
+          <div class="col-4">
+            <div style="font-size:.75rem;color:#9ca3af">得点率</div>
+            <div class="fw-bold fs-5">{{ (criterionRate(selectedCourse, selectedCourse.attendanceScale.criterionId)*100).toFixed(0) }}%</div>
+          </div>
+        </div>
+        <div class="mb-2">
+          <div class="section-label mb-1">配点スケール</div>
+          <div class="d-flex flex-wrap gap-1">
+            <span v-for="(st,i) in scaleSorted(selectedCourse.attendanceScale.steps)" :key="i"
+              class="badge" :class="effectiveAbsences(selectedCourse) <= st.absences ? 'bg-light text-dark border' : 'bg-secondary'"
+              style="font-weight:500">{{ st.absences }}欠 → {{ st.points }}%</span>
+          </div>
+          <div style="font-size:.72rem;color:#9ca3af;margin-top:4px">中間の欠席数は線形補間で計算します</div>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary" @click="editAttScale = !editAttScale">
+          {{ editAttScale ? '✓ 完了' : '✏ スケールを編集' }}
+        </button>
+        <div v-if="editAttScale" class="border rounded p-2 mt-2">
+          <div v-for="(st,i) in selectedCourse.attendanceScale.steps" :key="i" class="d-flex gap-2 align-items-center mb-1">
+            <div class="input-group input-group-sm" style="width:110px">
+              <input type="number" min="0" v-model.number="st.absences" class="form-control"><span class="input-group-text">欠</span>
+            </div>
+            <span>→</span>
+            <div class="input-group input-group-sm" style="width:110px">
+              <input type="number" min="0" v-model.number="st.points" class="form-control"><span class="input-group-text">%</span>
+            </div>
+            <button class="btn btn-sm btn-outline-danger" @click="selectedCourse.attendanceScale.steps.splice(i,1)">✕</button>
+          </div>
+          <div class="d-flex gap-2 align-items-center mt-2 flex-wrap">
+            <button class="btn btn-sm btn-outline-primary" @click="selectedCourse.attendanceScale.steps.push({absences:0,points:0})">＋ 段階を追加</button>
+            <div class="input-group input-group-sm" style="width:210px">
+              <span class="input-group-text">遅刻</span>
+              <input type="number" min="0" v-model.number="selectedCourse.attendanceScale.lateToAbsence" class="form-control">
+              <span class="input-group-text">回 = 欠席1</span>
+            </div>
+          </div>
+          <button class="btn btn-sm btn-outline-danger mt-2" @click="selectedCourse.attendanceScale=null; editAttScale=false">
+            段階式をやめる（通常の出席管理に戻す）
+          </button>
+        </div>
+      </div>
+
+      <!-- 通常：段階式でない授業 -->
+      <div v-else>
+        <div class="row g-2 text-center mb-3">
+          <div class="col-3">
+            <div style="font-size:.75rem;color:#9ca3af">総授業数</div>
+            <div class="fw-bold fs-5">{{ totalClasses(selectedCourse) }}</div>
+          </div>
+          <div class="col-3">
+            <div style="font-size:.75rem;color:#9ca3af">休講</div>
+            <div class="fw-bold fs-5 text-secondary">{{ selectedCourse.cancelledClasses }}</div>
+          </div>
+          <div class="col-3">
+            <div style="font-size:.75rem;color:#9ca3af">欠席</div>
+            <div class="fw-bold fs-5 text-danger">{{ selectedCourse.absences }}</div>
+          </div>
+          <div class="col-3">
+            <div style="font-size:.75rem;color:#9ca3af">出席率</div>
+            <div class="fw-bold fs-5" :class="attRateNum(selectedCourse)>=80?'text-success':'text-danger'">
+              {{ attRate(selectedCourse) }}%
+            </div>
+          </div>
+        </div>
+        <div class="row g-2" v-if="!(selectedCourse.meetingDays||[]).length">
+          <div class="col-md-4">
+            <label class="form-label small">欠席数（累計）</label>
+            <input type="number" min="0" v-model.number="selectedCourse.absences" class="form-control form-control-sm">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">休講数（累計）</label>
+            <input type="number" min="0" v-model.number="selectedCourse.cancelledClasses" class="form-control form-control-sm">
+          </div>
+        </div>
+        <div class="text-muted mt-2" style="font-size:.8rem">
+          有効授業数 {{ totalClasses(selectedCourse) - selectedCourse.cancelledClasses }}コマ
+          ／ 出席 {{ totalClasses(selectedCourse) - selectedCourse.cancelledClasses - selectedCourse.absences }}コマ
+        </div>
+        <button class="btn btn-sm btn-outline-secondary mt-3" @click="enableAttScale(selectedCourse)">
+          ＋ 段階式の出席配点を設定（シラバスに指示がある場合）
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== ADD GRADE ===================== -->
+  <div v-if="view==='addGrade' && selectedCourse && gradeForm">
+    <div class="d-flex align-items-center gap-2 mb-1">
+      <a class="nav-back" @click="view='detail'">← 戻る</a>
+      <h5 class="mb-0 fw-bold">成績を追加</h5>
+    </div>
+    <div class="text-muted small mb-3">{{ selectedCourse.name }}</div>
+
+    <!-- Step 1: Choose assignment -->
+    <div v-if="gradeForm.step===1">
+      <div class="section-label">課題を選んでください</div>
+
+      <!-- Pre-registered -->
+      <div v-if="availableAssignments(selectedCourse).length>0" class="mb-3">
+        <div style="font-size:.82rem;color:#6b7280;margin-bottom:.4rem">事前登録した課題から選択（入力済みは非表示）</div>
+        <div v-for="a in visibleAssignments(selectedCourse)" :key="a.id"
+             class="assign-item mb-2" :class="{sel: gradeForm.sel?.id===a.id}"
+             @click="gradeForm.sel=a">
+          <div class="d-flex justify-content-between">
+            <div>
+              <div class="fw-semibold">{{ a.name }}</div>
+              <div style="font-size:.8rem;color:#6b7280">{{ criterionName(selectedCourse, a.criterionId) }}</div>
+              <div v-if="a.memo" style="font-size:.78rem;color:#9ca3af">{{ a.memo }}</div>
+            </div>
+            <div class="text-end" style="font-size:.8rem;color:#9ca3af">
+              <div v-if="a.deadline">期限: {{ a.deadline }}</div>
+              <div>Max: {{ a.maxScore }}点</div>
+            </div>
+          </div>
+        </div>
+        <div v-if="availableAssignments(selectedCourse).length > listLimit" class="text-center mb-2">
+          <button class="btn btn-sm btn-link" @click="seeAllAssigns=!seeAllAssigns">
+            {{ seeAllAssigns ? 'see less ▲' : 'see more（残り ' + (availableAssignments(selectedCourse).length - listLimit) + ' 件）▼' }}
+          </button>
+        </div>
+
+        <!-- Confirm selected assignment -->
+        <div v-if="gradeForm.sel" class="alert alert-info py-2">
+          <div><strong>「{{ gradeForm.sel.name }}」</strong> を選択中</div>
+          <div class="small mt-1">内容はあっていますか？</div>
+          <div class="d-flex gap-2 mt-2">
+            <button class="btn btn-sm btn-primary" @click="proceedWithAssignment()">✓ あってる → 次へ</button>
+            <button class="btn btn-sm btn-outline-secondary" @click="editAssignment()">✏ 内容を修正</button>
+          </div>
+        </div>
+      </div>
+
+      <hr>
+      <button class="btn btn-outline-primary w-100" @click="gradeForm.step=2; gradeForm.sel=null; gradeForm.assignmentId=null">
+        ＋ 新しい課題を追加
+      </button>
+    </div>
+
+    <!-- Step 2: Enter grade details -->
+    <div v-if="gradeForm.step===2">
+      <div class="card p-3 mb-3" style="border-radius:14px">
+        <div class="row g-2">
+          <div class="col-12">
+            <label class="form-label">課題名 <span class="text-danger">*</span></label>
+            <input v-model="gradeForm.name" class="form-control" placeholder="課題・テストの名前">
+          </div>
+          <div class="col-md-5">
+            <label class="form-label">成績基準 <span class="text-danger">*</span></label>
+            <select v-model="gradeForm.criterionId" class="form-select">
+              <option value="">― 選択 ―</option>
+              <option v-for="cr in selectedCourse.gradingCriteria" :key="cr.id" :value="cr.id">
+                {{ cr.name }} ({{ cr.percentage }}%)
+              </option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">満点</label>
+            <input v-model.number="gradeForm.maxScore" type="number" min="1" class="form-control">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">実際の点数 <span class="text-danger">*</span></label>
+            <input v-model.number="gradeForm.actualScore" type="number" min="0" class="form-control">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">日付</label>
+            <input type="date" v-model="gradeForm.date" class="form-control">
+          </div>
+          <div class="col-12">
+            <label class="form-label">メモ（振り返り・反省など）</label>
+            <textarea v-model="gradeForm.memo" class="form-control" rows="2" placeholder="次に向けた気づきや反省点など"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <!-- Contribution preview -->
+      <div class="card bg-light p-3 mb-3" style="border-radius:14px" v-if="gradePreviewOk">
+        <div class="section-label">📊 この課題の成績への貢献</div>
+        <div class="row text-center">
+          <div class="col-4">
+            <div style="font-size:.75rem;color:#9ca3af">得点率</div>
+            <div class="fw-bold fs-4" :class="rateColor(gradeForm.actualScore/gradeForm.maxScore)">
+              {{ (gradeForm.actualScore/gradeForm.maxScore*100).toFixed(1) }}%
+            </div>
+          </div>
+          <div class="col-4">
+            <div style="font-size:.75rem;color:#9ca3af">基準ウエイト</div>
+            <div class="fw-bold fs-4">{{ criterionById(selectedCourse,gradeForm.criterionId)?.percentage }}%</div>
+          </div>
+          <div class="col-4">
+            <div style="font-size:.75rem;color:#9ca3af">総合への貢献度</div>
+            <div class="fw-bold fs-4 text-primary">{{ gradeContribution.toFixed(2) }}点</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="d-flex gap-2">
+        <button class="btn btn-primary" @click="saveGrade()">💾 保存</button>
+        <button class="btn btn-outline-secondary" @click="gradeForm.step = availableAssignments(selectedCourse).length>0 ? 1 : 2">← 戻る</button>
+      </div>
+    </div>
+  </div>
+  </div>
+  <!-- /APP 本体ラッパー -->
+
+</div>
+
+<script>
+const { createApp } = Vue;
+
+/* ===== Supabase 設定 =====
+   下の2つを、自分の Supabase プロジェクトの値に置き換えてください。
+   （Supabase ダッシュボード → Project Settings → API → Project URL / anon public key）
+   未設定のままなら、従来どおりこの端末内（localStorage）だけで動作します。 */
+const SUPABASE_URL = 'https://dxoxkngbsugtnkiusnoz.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR4b3hrbmdic3VndG5raXVzbm96Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2ODU1MDIsImV4cCI6MjA5NjI2MTUwMn0.s3Xd2tACQaNE5LnBZQnqhKZ4Dl1FqMWCQgi_OGdZwmA';
+/* ログイン保持の保存先を切り替えるストレージ:
+   「この端末でのログインを省略」ON  → localStorage（次回も自動ログイン）
+                                OFF → sessionStorage（ブラウザを閉じると再ログイン） */
+const REMEMBER_KEY = 'gpa_remember';
+const authStorage = {
+  getItem(k) { const v = localStorage.getItem(k); return v !== null ? v : sessionStorage.getItem(k); },
+  setItem(k, v) {
+    if (localStorage.getItem(REMEMBER_KEY) === '0') { sessionStorage.setItem(k, v); localStorage.removeItem(k); }
+    else { localStorage.setItem(k, v); sessionStorage.removeItem(k); }
+  },
+  removeItem(k) { localStorage.removeItem(k); sessionStorage.removeItem(k); },
+};
+const supa = (!SUPABASE_URL || SUPABASE_URL.indexOf('YOUR-PROJECT') !== -1 || typeof supabase === 'undefined')
+  ? null
+  : supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { storage: authStorage, persistSession: true, autoRefreshToken: true }
+    });
+let realtimeChannel = null;   // リアルタイム購読チャンネル（非リアクティブで保持）
+
+createApp({
+  data() {
+    return {
+      view: 'home',
+      currentTerm: 'spring',
+      showTermSel: false,
+      editCriteria: false,
+      editAttScale: false,
+      listLimit: 5,
+      seeAllGrades: false,
+      seeAllAssigns: false,
+      seeAllCourses: false,
+      weekdayLabels: ['日','月','火','水','木','金','土'],
+      sessionOpts: [
+        { v:'present',   label:'出', cls:'btn-success' },
+        { v:'late',      label:'遅', cls:'btn-warning' },
+        { v:'absent',    label:'欠', cls:'btn-danger' },
+        { v:'cancelled', label:'休', cls:'btn-secondary' },
+      ],
+
+      // シラバス自動読み取り
+      syllabusInput: 'text',
+      syllabusBusy: false,
+      syllabusStatus: '',
+
+      // 教師・教室マスタ（過去入力の候補。適宜追加される）
+      teacherMaster: [],
+      roomMaster: [],
+      manageNewTeacher: '',
+      manageNewRoom: '',
+      newTeacherInput: '',
+      newRoomInput: '',
+
+      termDefs: {
+        spring: { name: 'Spring Term', weeks: 14, start: '2026-04-07', end: '2026-07-15' },
+        autumn: { name: 'Autumn Term', weeks: 12, start: '2026-09-28', end: '2026-12-19' },
+        winter: { name: 'Winter Term', weeks: 10, start: '2027-01-10', end: '2027-03-13' },
+      },
+
+      courseTypes: ['ELA', 'JLP', 'GEN', 'FND', 'MAJOR', 'MINOR', 'ELECTIVE', 'PEX'],
+
+      // ICU grading scale (A:90-100, B:80-89, C:70-79, D:60-69, E:0-59)
+      gradeScale: [
+        { grade: 'A', min: 90, gpa: 4 },
+        { grade: 'B', min: 80, gpa: 3 },
+        { grade: 'C', min: 70, gpa: 2 },
+        { grade: 'D', min: 60, gpa: 1 },
+        { grade: 'E', min: 0,  gpa: 0 },
+      ],
+
+      courses: [],
+      selectedCourse: null,
+      courseForm: null,
+      gradeForm: null,
+      toast: null,
+
+      // 認証・クラウド同期
+      cloudOn: !!supa,
+      authReady: false,
+      user: null,
+      authMode: 'login',     // 'login' | 'signup'
+      authEmail: '',
+      authPassword: '',
+      authError: '',
+      authNotice: '',
+      authBusy: false,
+      authRemember: true,    // この端末でのログインを省略（自動ログイン）
+      isApplyingRemote: false,
+      saveTimer: null,
+      realtimeStatus: 'off',   // 'off' | 'connecting' | 'connected' | 'error'
+      saving: false,
+      lastSelfWriteAt: '',
+    };
+  },
+
+  computed: {
+    currentTermCourses() {
+      return this.courses.filter(c => c.term === this.currentTerm);
+    },
+
+    // 同期状態インジケーター
+    syncBadge() {
+      if (!this.cloudOn) return { text: 'この端末のみ', color: '#9ca3af', dot: '○' };
+      if (!this.user)    return { text: '未ログイン',    color: '#9ca3af', dot: '○' };
+      if (this.saving)   return { text: '保存中…',       color: '#d97706', dot: '●' };
+      if (this.realtimeStatus === 'connected')  return { text: 'リアルタイム同期中', color: '#16a34a', dot: '●' };
+      if (this.realtimeStatus === 'connecting') return { text: '接続中…',           color: '#9ca3af', dot: '○' };
+      if (this.realtimeStatus === 'error')      return { text: '同期エラー',         color: '#dc2626', dot: '⚠' };
+      return { text: '同期待機', color: '#9ca3af', dot: '○' };
+    },
+
+    todayStr() {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    },
+
+    overallPredictedGPA() {
+      const valid = this.currentTermCourses.filter(c => this.predictedScore(c) !== null);
+      if (!valid.length) return null;
+      // 単位加重平均: Σ(grade point × 週コマ数) / Σ(週コマ数)
+      let totalPoints = 0, totalCredits = 0;
+      for (const c of valid) {
+        const gpa = this.scoreToGrade(this.predictedScore(c), c)?.gpa || 0;
+        const credits = c.weeklyClasses || 1;
+        totalPoints += gpa * credits;
+        totalCredits += credits;
+      }
+      return totalCredits > 0 ? (totalPoints / totalCredits).toFixed(2) : null;
+    },
+
+    // 予想③（プール方式・未入力=65%）の単位加重GPA
+    overallPredictedGPAPooled() {
+      const courses = this.currentTermCourses.filter(c => c.gradingCriteria.length > 0);
+      if (!courses.length) return null;
+      let totalPoints = 0, totalCredits = 0;
+      for (const c of courses) {
+        const s = this.pooledScore(c);
+        if (s === null) continue;
+        const gpa = this.scoreToGrade(s, c)?.gpa || 0;
+        const credits = c.weeklyClasses || 1;
+        totalPoints += gpa * credits;
+        totalCredits += credits;
+      }
+      return totalCredits > 0 ? (totalPoints / totalCredits).toFixed(2) : null;
+    },
+
+    elaCourses() {
+      return this.courses.filter(c => c.type === 'ELA');
+    },
+
+    elaYearGPA() {
+      const gpas = ['spring','autumn','winter']
+        .map(t => this.elaTermAvgGPA(t))
+        .filter(g => g !== null);
+      if (!gpas.length) return null;
+      return (gpas.reduce((a,b)=>a+b,0)/gpas.length).toFixed(2);
+    },
+
+    // courseForm computed
+    criteriaTotal() {
+      if (!this.courseForm) return 0;
+      return this.courseForm.gradingCriteria.reduce((s,c) => s+(c.percentage||0), 0);
+    },
+    criteriaTotalOk() { return Math.abs(this.criteriaTotal - 100) < 0.5; },
+
+    // selectedCourse criteria
+    selCriteriaTotal() {
+      if (!this.selectedCourse) return 0;
+      return this.selectedCourse.gradingCriteria.reduce((s,c) => s+(c.percentage||0), 0);
+    },
+    selCriteriaOk() { return Math.abs(this.selCriteriaTotal - 100) < 0.5; },
+
+    cutoffsValid() {
+      if (!this.courseForm || !this.courseForm.useCustomScale) return true;
+      const z = this.courseForm.gradeCutoffs;
+      return z.A > z.B && z.B > z.C && z.C > z.D && z.D > 0;
+    },
+
+    // Grade form preview
+    gradePreviewOk() {
+      return this.gradeForm
+        && this.gradeForm.criterionId
+        && this.gradeForm.actualScore !== null
+        && this.gradeForm.maxScore > 0;
+    },
+
+    gradeContribution() {
+      if (!this.gradePreviewOk) return 0;
+      const cr = this.criterionById(this.selectedCourse, this.gradeForm.criterionId);
+      if (!cr) return 0;
+      return cr.percentage * (this.gradeForm.actualScore / this.gradeForm.maxScore);
+    },
+  },
+
+  methods: {
+    // ── Grade Calculation ──────────────────────────────
+    criterionRate(course, cId) {
+      // 出席スケールが紐づく criterion は欠席・遅刻から自動算出
+      const sc = course.attendanceScale;
+      if (sc && sc.criterionId === cId) {
+        const cr = this.criterionById(course, cId);
+        const pts = this.attendanceScalePoints(course);
+        if (cr && cr.percentage > 0 && pts !== null) return Math.max(0, Math.min(1, pts / cr.percentage));
+      }
+      const gs = course.grades.filter(g => g.criterionId === cId);
+      if (!gs.length) return null;
+      // 全gradeに重み(weight)がある場合は重み付き平均（シラバスの内訳%を反映）、なければ均等平均
+      if (gs.every(g => g.weight > 0)) {
+        let num = 0, den = 0;
+        for (const g of gs) { num += g.weight * (g.maxScore > 0 ? g.actualScore / g.maxScore : 0); den += g.weight; }
+        return den > 0 ? num / den : null;
+      }
+      return gs.reduce((s,g) => s + (g.maxScore>0 ? g.actualScore/g.maxScore : 0), 0) / gs.length;
+    },
+
+    // 出席スケール: 欠席数（＋遅刻換算）から獲得ポイントを算出
+    effectiveAbsences(course) {
+      const sc = course.attendanceScale;
+      const lates = course.lates || 0;
+      const conv = sc && sc.lateToAbsence ? sc.lateToAbsence : 0;
+      return (course.absences || 0) + (conv > 0 ? Math.floor(lates / conv) : 0);
+    },
+    attendanceScalePoints(course) {
+      const sc = course.attendanceScale;
+      if (!sc || !sc.steps || !sc.steps.length) return null;
+      return this.scaleScore(sc.steps, this.effectiveAbsences(course));
+    },
+    scaleScore(steps, x) {
+      const s = steps.slice().sort((a, b) => a.absences - b.absences);
+      if (!s.length) return 0;
+      if (x <= s[0].absences) return s[0].points;
+      const last = s[s.length - 1];
+      if (x >= last.absences) return last.points;
+      for (let i = 0; i < s.length - 1; i++) {
+        const a = s[i], b = s[i + 1];
+        if (x >= a.absences && x <= b.absences) {
+          const t = (b.absences === a.absences) ? 0 : (x - a.absences) / (b.absences - a.absences);
+          return a.points + t * (b.points - a.points);
+        }
+      }
+      return last.points;
+    },
+    scaleSorted(steps) { return steps.slice().sort((a, b) => a.absences - b.absences); },
+    enableAttScale(course) {
+      const attCr = course.gradingCriteria.find(c => /attendance|attention|出席|出欠|平常/i.test(c.name)) || course.gradingCriteria[0];
+      if (!attCr) { this.toast_('先に Grading Criteria を追加してください', 'warning'); return; }
+      const w = attCr.percentage || 10;
+      course.attendanceScale = {
+        criterionId: attCr.id,
+        steps: [{ absences: 0, points: w }, { absences: w, points: 0 }],
+        lateToAbsence: 3,
+      };
+      course.attendanceMatters = true;
+      this.editAttScale = true;
+      this.saveData();
+    },
+
+    coveredWeight(course) {
+      return course.gradingCriteria
+        .filter(c => this.criterionRate(course, c.id) !== null)
+        .reduce((s,c) => s+c.percentage, 0);
+    },
+
+    earnedSoFar(course) {
+      return course.gradingCriteria.reduce((s,c) => {
+        const r = this.criterionRate(course, c.id);
+        return r !== null ? s + c.percentage * r : s;
+      }, 0);
+    },
+
+    avgRate(course) {
+      // トレンド予想の母数からは出席スケール項目を除外（自動確定済みで学業成績の伸びとは無関係なため）
+      const sc = course.attendanceScale;
+      const covered = course.gradingCriteria.filter(c =>
+        this.criterionRate(course, c.id) !== null && !(sc && sc.criterionId === c.id)
+      );
+      if (!covered.length) return null;
+      return covered.reduce((s,c) => s + this.criterionRate(course,c.id), 0) / covered.length;
+    },
+
+    predictedScore(course) {
+      if (!course.gradingCriteria.length) return null;
+      const avg = this.avgRate(course);
+      if (avg === null) return null;
+      const earned = this.earnedSoFar(course);
+      const remaining = 100 - this.coveredWeight(course);
+      return earned + remaining * avg;
+    },
+
+    bestCase(course) {
+      return this.earnedSoFar(course) + (100 - this.coveredWeight(course));
+    },
+
+    worstCase(course) {
+      return this.earnedSoFar(course);
+    },
+
+    effectiveScale(course) {
+      // 授業ごとにシラバス独自の cutoff があればそれを優先
+      if (course && course.useCustomScale && course.gradeCutoffs) {
+        const z = course.gradeCutoffs;
+        return [
+          { grade: 'A', min: z.A, gpa: 4 },
+          { grade: 'B', min: z.B, gpa: 3 },
+          { grade: 'C', min: z.C, gpa: 2 },
+          { grade: 'D', min: z.D, gpa: 1 },
+          { grade: 'E', min: 0,   gpa: 0 },
+        ];
+      }
+      return this.gradeScale;
+    },
+
+    scoreToGrade(score, course) {
+      if (score === null || score === undefined) return null;
+      // 四捨五入の指示がある授業のみ、満精度の合計点を四捨五入して判定（個々の点は丸めない）。
+      // 指示がなければ厳密cutoff（例: 89.9% は B）。
+      const s = (course && course.roundGrade) ? Math.round(score) : score;
+      const scale = this.effectiveScale(course);
+      for (const g of scale) if (s >= g.min) return g;
+      return scale[scale.length-1];
+    },
+
+    neededFor(course, targetGrade) {
+      const tg = this.effectiveScale(course).find(g => g.grade === targetGrade);
+      if (!tg) return null;
+      // 四捨五入の授業のみ cutoff−0.5 点で到達（それ以外は cutoff ちょうど必要）
+      const margin = (course && course.roundGrade) ? 0.5 : 0;
+      return (tg.min - margin) - this.earnedSoFar(course);
+    },
+
+    neededForStr(course, targetGrade) {
+      const needed = this.neededFor(course, targetGrade);
+      if (needed === null) return '―';
+      if (needed <= 0) return '✓ 達成';
+      const rem = 100 - this.coveredWeight(course);
+      if (rem <= 0) return '不可能';
+      return `残り${(needed/rem*100).toFixed(0)}%以上`;
+    },
+
+    // ELA cross-term
+    elaTermAvgGPA(term) {
+      const ela = this.courses.filter(c => c.type==='ELA' && c.term===term);
+      if (!ela.length) return null;
+      let tp = 0, tc = 0;
+      for (const c of ela) {
+        const gpa = this.scoreToGrade(this.predictedScore(c), c)?.gpa;
+        if (gpa == null) continue;
+        const cr = c.weeklyClasses || 1;
+        tp += gpa * cr; tc += cr;
+      }
+      return tc > 0 ? tp / tc : null;
+    },
+
+    elaTermAvgGrade(term) {
+      const gpa = this.elaTermAvgGPA(term);
+      if (gpa === null) return null;
+      const g = this.gradeScale.slice().reverse().find(g => g.gpa >= gpa);
+      return g?.grade || '―';
+    },
+
+    // ── Course Management ──────────────────────────────
+    openAddCourse() {
+      this.courseForm = {
+        id: null, name: '', type: 'GEN', teachers: [], classrooms: [],
+        term: this.currentTerm, weeklyClasses: 2, attendanceMatters: false,
+        gradingCriteria: [], assignments: [], grades: [], completedCriteria: [],
+        meetingDays: [], sessionStatus: {}, weeksOverride: null, totalClassesOverride: null,
+        absences: 0, lates: 0, cancelledClasses: 0, attendanceScale: null,
+        syllabusText: '', attendanceAuto: '', attendanceUncertain: false,
+        useCustomScale: false, gradeCutoffs: { A: 90, B: 80, C: 70, D: 60 }, roundGrade: false
+      };
+      this.newTeacherInput = '';
+      this.newRoomInput = '';
+      this.syllabusInput = 'text';
+      this.syllabusStatus = '';
+      this.view = 'addCourse';
+    },
+
+    openEditCourse(course) {
+      const f = JSON.parse(JSON.stringify(course));
+      if (!f.gradeCutoffs) f.gradeCutoffs = { A: 90, B: 80, C: 70, D: 60 };
+      if (f.useCustomScale === undefined) f.useCustomScale = false;
+      if (f.attendanceAuto === undefined) f.attendanceAuto = '';
+      if (f.syllabusText === undefined) f.syllabusText = '';
+      if (f.lates === undefined) f.lates = 0;
+      if (f.attendanceScale === undefined) f.attendanceScale = null;
+      if (f.attendanceUncertain === undefined) f.attendanceUncertain = false;
+      if (!Array.isArray(f.meetingDays)) f.meetingDays = [];
+      if (!f.sessionStatus || typeof f.sessionStatus !== 'object') f.sessionStatus = {};
+      if (f.weeksOverride === undefined) f.weeksOverride = null;
+      if (f.totalClassesOverride === undefined) f.totalClassesOverride = null;
+      // 旧データ（単一の teacher/classroom）を配列へ移行
+      if (!Array.isArray(f.teachers)) f.teachers = f.teacher ? [f.teacher] : [];
+      if (!Array.isArray(f.classrooms)) f.classrooms = f.classroom ? [f.classroom] : [];
+      if (!Array.isArray(f.completedCriteria)) f.completedCriteria = [];
+      if (f.roundGrade === undefined) f.roundGrade = false;
+      this.courseForm = f;
+      this.newTeacherInput = '';
+      this.newRoomInput = '';
+      this.syllabusInput = 'text';
+      this.syllabusStatus = '';
+      this.view = 'addCourse';
+    },
+
+    saveCourse() {
+      if (!this.courseForm.name.trim()) { this.toast_('授業名を入力してください', 'danger'); return; }
+      if (this.courseForm.gradingCriteria.length > 0 && !this.criteriaTotalOk) {
+        this.toast_(`成績基準の合計が ${this.criteriaTotal.toFixed(0)}% です。100%にしてください。`, 'danger');
+        return;
+      }
+      if (this.courseForm.useCustomScale && !this.cutoffsValid) {
+        this.toast_('成績スケールの下限点は A > B > C > D の順に設定してください', 'danger');
+        return;
+      }
+      // 未確定の入力欄（＋を押していない分）も取り込む
+      const pendingT = (this.newTeacherInput || '').trim();
+      if (pendingT && !this.courseForm.teachers.includes(pendingT)) this.courseForm.teachers.push(pendingT);
+      this.newTeacherInput = '';
+      const pendingR = (this.newRoomInput || '').trim();
+      if (pendingR && !this.courseForm.classrooms.includes(pendingR)) this.courseForm.classrooms.push(pendingR);
+      this.newRoomInput = '';
+      (this.courseForm.teachers || []).forEach(t => this.addToMaster(this.teacherMaster, t));
+      (this.courseForm.classrooms || []).forEach(r => this.addToMaster(this.roomMaster, r));
+      if (this.courseForm.id) {
+        const idx = this.courses.findIndex(c => c.id === this.courseForm.id);
+        if (idx >= 0) this.courses[idx] = JSON.parse(JSON.stringify(this.courseForm));
+      } else {
+        this.courseForm.id = this.uid();
+        this.courses.push(JSON.parse(JSON.stringify(this.courseForm)));
+      }
+      this.saveData();
+      this.toast_('授業を保存しました ✓', 'success');
+      this.view = 'home';
+    },
+
+    deleteCourse() {
+      if (!confirm(`「${this.courseForm.name}」を削除しますか？`)) return;
+      this.courses = this.courses.filter(c => c.id !== this.courseForm.id);
+      this.saveData();
+      this.toast_('授業を削除しました', 'secondary');
+      this.view = 'home';
+    },
+
+    openDetail(course) {
+      this.selectedCourse = course;
+      this.recomputeAttendance(course);   // 曜日変更などをカレンダー集計に同期
+      this.editCriteria = false;
+      this.editAttScale = false;
+      this.seeAllGrades = false;
+      this.view = 'detail';
+    },
+
+    addCriterion(target) {
+      target.gradingCriteria.push({ id: this.uid(), name: '', percentage: 0 });
+    },
+
+    saveCriteriaEdit() {
+      if (!this.selCriteriaOk) {
+        this.toast_(`合計が ${this.selCriteriaTotal.toFixed(0)}% です。100%にしてください。`, 'danger');
+        return;
+      }
+      this.editCriteria = false;
+      this.saveData();
+      this.toast_('成績基準を保存しました ✓', 'success');
+    },
+
+    addAssignment(target) {
+      target.assignments.push({ id: this.uid(), name: '', criterionId: '', deadline: '', maxScore: 100, memo: '' });
+    },
+
+    // ── シラバス自動読み取り ───────────────────────────
+    runSyllabusAnalysis() {
+      const text = (this.courseForm.syllabusText || '').trim();
+      if (!text) { this.toast_('シラバスのテキストがありません。貼り付けかファイル読み込みをしてください', 'warning'); return; }
+      const r = this.analyzeSyllabus(text);
+      this.applySyllabusResult(r);
+    },
+
+    applySyllabusResult(r) {
+      const msgs = [];
+      if (r.criteria.length) {
+        this.courseForm.gradingCriteria = r.criteria.map(c => ({ id: this.uid(), name: c.name, percentage: c.percentage }));
+        msgs.push(`成績基準 ${r.criteria.length} 件`);
+        // 具体的な課題名を自動で「事前登録した課題」に追加（participation/attendance系は除外）
+        // 括弧内に名前付き内訳があれば、それぞれを個別課題＋重み(weight)として登録
+        const skipAssignRe = /(attendance|participation|出席|出欠|平常点|engagement|in[\-\s]?class)/i;
+        const subMap = r.subAssignMap || {};
+        const autoAssigns = [];
+        for (const c of this.courseForm.gradingCriteria) {
+          if (skipAssignRe.test(c.name)) continue;
+          const subs = subMap[c.name.toLowerCase()];
+          if (subs && subs.length >= 2) {
+            for (const s of subs) {
+              autoAssigns.push({ id: this.uid(), name: c.name + '：' + s.name, criterionId: c.id, deadline: '', maxScore: 100, memo: '', weight: s.pct });
+            }
+          } else {
+            autoAssigns.push({ id: this.uid(), name: c.name, criterionId: c.id, deadline: '', maxScore: 100, memo: '', weight: null });
+          }
+        }
+        if (autoAssigns.length) {
+          this.courseForm.assignments = autoAssigns;
+          msgs.push(`課題 ${autoAssigns.length} 件`);
+        }
+      }
+      this.courseForm.attendanceMatters = r.attendanceMatters;
+      this.courseForm.attendanceAuto = r.attendanceReason;
+      this.courseForm.attendanceUncertain = !!r.attendanceUncertain;
+      // 出席スケールはシラバスに段階式の指示があるときだけ設定
+      this.courseForm.attendanceScale = null;
+      if (r.attendanceScale) {
+        const attCr = this.courseForm.gradingCriteria.find(c => /attendance|attention|出席|出欠/i.test(c.name));
+        if (attCr) {
+          this.courseForm.attendanceScale = { criterionId: attCr.id, steps: r.attendanceScale.steps, lateToAbsence: r.attendanceScale.lateToAbsence };
+          this.courseForm.attendanceMatters = true;
+          this.courseForm.attendanceUncertain = false;
+          this.courseForm.attendanceAuto = `出席スケール検出（最大 ${attCr.percentage}%・${r.attendanceScale.steps.length}段階${r.attendanceScale.lateToAbsence ? `／遅刻${r.attendanceScale.lateToAbsence}回=欠席1回` : ''}）`;
+        }
+      }
+      msgs.push(this.courseForm.attendanceScale ? '出席スケール' : (this.courseForm.attendanceMatters ? '出席=影響する' : '出席=影響しない'));
+      // 四捨五入の指示があるときだけ有効化
+      this.courseForm.roundGrade = !!r.roundGrade;
+      if (r.roundGrade) msgs.push('合計を四捨五入');
+      if (r.cutoffs) {
+        const isDefault = r.cutoffs.A === 90 && r.cutoffs.B === 80 && r.cutoffs.C === 70 && r.cutoffs.D === 60;
+        if (!isDefault) {
+          this.courseForm.useCustomScale = true;
+          this.courseForm.gradeCutoffs = r.cutoffs;
+          msgs.push(`独自cutoff(A≥${r.cutoffs.A})`);
+        }
+      }
+      if (!r.criteria.length && !r.cutoffs) {
+        this.toast_('うまく読み取れませんでした。Grading部分だけを貼るか、手動で入力してください', 'warning');
+        return;
+      }
+      this.toast_('反映しました: ' + msgs.join(' / ') + '（下で確認・修正できます）', 'success');
+    },
+
+    analyzeSyllabus(text) {
+      // 全角→半角などを正規化（全角数字・全角％・全角英字・全角スペースに対応）
+      let norm = text;
+      try { norm = text.normalize('NFKC'); } catch (e) {}
+      // 成績評価の表だけを対象に（"Grading scale / Grades:" 以降の説明文は誤検出のもとなので除外）
+      let region = norm;
+      {
+        const cutM = norm.match(/(grading\s*(?:scale|criteria)|grade\s*scale|\n\s*grades?\s*[:：]|成績評価基準|評価基準)/i);
+        if (cutM && cutM.index > 40) region = norm.slice(0, cutM.index);
+      }
+      // 出席スケール（"… (0 absences = 10%; 2 absences = 8%; …) 3 lates = 1 absence"）を検出
+      let attendanceScale = null;
+      {
+        const sm = norm.match(/[(（]([^()（）]*absences?[^()（）]*?=[^()（）]*?%[^()（）]*)[)）]([^\n]{0,40})/i);
+        if (sm) {
+          const steps = [...sm[1].matchAll(/(\d{1,3})\s*absences?\s*=\s*(\d{1,3}(?:\.\d+)?)\s*%/gi)]
+            .map(x => ({ absences: +x[1], points: parseFloat(x[2]) }));
+          let lateToAbsence = 0;
+          const lm = (sm[1] + ' ' + (sm[2] || '')).match(/(\d+)\s*(?:lates?|tardies?|遅刻)\s*=\s*(\d+)\s*absences?/i);
+          if (lm) lateToAbsence = +lm[1];
+          if (steps.length >= 2) attendanceScale = { steps, lateToAbsence };
+        }
+      }
+      // ラベル整形（criteria抽出・課題名で共用）
+      const cleanLabel = (s) => s
+        .replace(/^\s*[\d０-９①-⑳ⅰ-ⅹ]+\s*[.\)、:：]\s*/, ' ')                        // 先頭の番号付け（1. ① (1) 等）
+        .replace(/\.{2,}|…/g, ' ')                                                  // ドットリーダー
+        .replace(/\b(counts?\s+for|accounts?\s+for|makes?\s+up|comprises?|consists?\s+of)\b/ig, ' ')
+        .replace(/\b(of\s+(?:the\s+)?(?:final|total|course|overall|your)?\s*grade)\b/ig, ' ')
+        .replace(/\b(worth|approx\.?|approximately|about|up\s*to|max(?:imum)?|each|total)\b/ig, ' ')
+        .replace(/[*_>•・·:：=\(\)\[\]]+/g, ' ')
+        .replace(/^[\s\-–—.,;]+|[\s\-–—.,;]+$/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      // 括弧内の「名前付き内訳」を課題候補として抽出（collapse前に）。例: Essay (Outline 5%, Final 10%)
+      const subAssignMap = {};
+      {
+        const subRe = /([^\n()（）]{2,40})[(（]([^()（）]*%[^()（）]*)[)）]/g;
+        let sm3;
+        while ((sm3 = subRe.exec(region)) !== null) {
+          const inner = sm3[2];
+          if (/(absences?|lates?|tard|欠席|遅刻|出席)/i.test(inner)) continue; // 出席スケールは除外
+          const parts = [];
+          const partRe = /([^,;；、(]+?)\s*(\d{1,3}(?:\.\d+)?)\s*%/g;
+          let pm;
+          while ((pm = partRe.exec(inner)) !== null) {
+            const nm = cleanLabel(pm[1]);
+            const p = parseFloat(pm[2]);
+            if (nm && nm.length >= 2 && !/^\d+$/.test(nm) && p > 0) parts.push({ name: nm, pct: p });
+          }
+          if (parts.length >= 2) {
+            const parent = cleanLabel(sm3[1].split(/[,;、，]/).pop());
+            if (parent && parent.length >= 2) subAssignMap[parent.toLowerCase()] = parts;
+          }
+        }
+      }
+
+      // 括弧内の配点をまとめる: 出席スケール=最大値 / "N×M%"等の乗算=積 / その他の内訳=合計
+      //   例: "Reaction Paper (1st draft 5%; Final 10%)" → "Reaction Paper 15%"
+      //       "Assignments (6 tasks × 10% each)"        → "Assignments 60%"
+      //       "Tasks (10% x 2)"                          → "Tasks 20%"
+      const collapsed = region.replace(/[(（]([^()（）]*?%[^()（）]*?)[)）]/g, (whole, inner) => {
+        const nums = [...inner.matchAll(/(\d{1,3}(?:\.\d+)?)\s*%/g)].map(x => parseFloat(x[1]));
+        if (!nums.length) return whole;
+        if (/(absences?|lates?|tard|欠席|遅刻|出席)/i.test(inner)) return ' ' + Math.max(...nums) + '% ';
+        let mult = null, mm2;
+        if ((mm2 = inner.match(/(\d+)\s*(?:tasks?|entries|items?|assignments?|つ|個|回)[^%]*?(\d{1,3}(?:\.\d+)?)\s*%[^%]*?\beach\b/i))) mult = parseInt(mm2[1]) * parseFloat(mm2[2]);
+        else if ((mm2 = inner.match(/(\d{1,3}(?:\.\d+)?)\s*%\s*[x×✕✗*・ラ]\s*(\d+)/i))) mult = parseFloat(mm2[1]) * parseInt(mm2[2]);
+        else if ((mm2 = inner.match(/(\d+)\s*[x×✕✗*・ラ]\s*(\d{1,3}(?:\.\d+)?)\s*%/i))) mult = parseInt(mm2[1]) * parseFloat(mm2[2]);
+        const val = (mult !== null) ? mult : nums.reduce((a, b) => a + b, 0);
+        return ' ' + (Math.round(val * 100) / 100) + '% ';
+      });
+      const lines = collapsed.split(/\r?\n/);
+
+      // --- 成績 cutoff の検出 ---
+      const cutoffRaw = {};
+      const setCut = (g, v) => { g = g.toUpperCase(); if ('ABCDEF'.includes(g) && cutoffRaw[g] === undefined) cutoffRaw[g] = v; };
+      let m;
+      const reRange = /\b([A-Fa-f])\s*[:：=]?\s*(\d{1,3})\s*(?:[-–—~〜]|to|から)\s*(\d{1,3})/g;
+      while ((m = reRange.exec(norm)) !== null) setCut(m[1], Math.min(+m[2], +m[3]));
+      const reAbove = /\b([A-Fa-f])\s*[:：=]?\s*(\d{1,3})\s*(?:点)?\s*(?:以上|\+|or\s*above|and\s*above)/gi;
+      while ((m = reAbove.exec(norm)) !== null) setCut(m[1], +m[2]);
+      const reRev = /(\d{1,3})\s*(?:[-–—~〜]|to)\s*(\d{1,3})\s*[:：]?\s*([A-Fa-f])\b/g;
+      while ((m = reRev.exec(norm)) !== null) setCut(m[3], Math.min(+m[1], +m[2]));
+
+      let cutoffs = null;
+      if (['A','B','C','D'].every(g => cutoffRaw[g] !== undefined)) {
+        const c = { A: cutoffRaw.A, B: cutoffRaw.B, C: cutoffRaw.C, D: cutoffRaw.D };
+        if (c.A > c.B && c.B > c.C && c.C > c.D && c.D > 0) cutoffs = c;
+      }
+
+      // --- grading criteria の検出 ---
+      const skipLabel = /^(total|合計|計|sum|grade|grades|grading|evaluation|assessment|総合|内訳|成績|評価|breakdown|components?|categor(?:y|ies)|items?|weight(?:ing)?)$/i;
+      const onlyGrade = /^[ABCDEF][+\-]?$/;
+      const gradeRangeLabel = /^[A-F][+\-]?[\s\d.\-–—~〜to]*$/i; // "A 90", "B 80-89" 等のcutoff片
+
+      // 1行に複数項目（"A 10%, B 20%, C 70%"）でも各%の直前テキストをラベルとして拾う
+      const criteria = [];
+      const pctRe = /(\d{1,3}(?:\.\d+)?)\s*(?:%|percent\b)/gi;
+      for (const line of lines) {
+        pctRe.lastIndex = 0;
+        let mm, last = 0;
+        while ((mm = pctRe.exec(line)) !== null) {
+          const pct = parseFloat(mm[1]);
+          const seg = line.slice(last, mm.index);
+          last = pctRe.lastIndex;
+          if (!(pct > 0 && pct <= 100)) continue;
+          const parts = seg.split(/[,;、，]/);           // 直近の区切り以降がこの%のラベル
+          const rawLast = parts[parts.length - 1];
+          if (/[:：]\s*$/.test(rawLast)) continue;       // "Academic Writing:" 等の見出し合計（内訳と二重計上になる）はスキップ
+          const label = cleanLabel(rawLast);
+          if (!label || label.length < 2) continue;
+          if (/^\d+$/.test(label)) continue;
+          if (/^(etc|e\.?g|i\.?e|ex|note|see|and|or)\.?$/i.test(label)) continue;  // 断片的な誤検出を除外
+          if (skipLabel.test(label)) continue;
+          if (onlyGrade.test(label)) continue;
+          if (gradeRangeLabel.test(label)) continue;
+          criteria.push({ name: label, percentage: pct });
+        }
+      }
+
+      // 同名ラベルは最初の1件に統合
+      const seen = new Set();
+      const dedup = [];
+      for (const c of criteria) {
+        const key = c.name.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key); dedup.push(c);
+      }
+
+      // --- 出席が評価に影響するかの自動判定 ---
+      // 強い根拠 = 「出席」そのもの／弱い根拠 = participation・平常点など（参加点は出席を含むことが多いが断定不可→要確認）
+      const strongRe = /(attendance|出席|出欠)/i;
+      const weakRe = /(participation|engagement|平常点|in[\-\s]?class)/i;
+      const negRe = /(attendance|出席)[^。\n]{0,40}(not\s+(count|graded|affect|be\s+part)|does\s+not|no\s+(?:grade|effect|credit)|含(まな|めな|みません)|影響しな|評価に(は)?(入らな|含まれ)|関係(しない|なし)|加味しな)/i;
+      let attendanceMatters = false, attendanceReason = '', attendanceUncertain = false;
+      const strongCrit = dedup.find(c => strongRe.test(c.name));
+      const weakCrit = dedup.find(c => weakRe.test(c.name));
+      if (negRe.test(norm)) {
+        attendanceMatters = false;
+        attendanceReason = '出席は成績に影響しない（本文の記述より）';
+      } else if (strongCrit) {
+        attendanceMatters = true;
+        attendanceReason = `「${strongCrit.name} ${strongCrit.percentage}%」が成績に含まれる`;
+      } else if (weakCrit) {
+        attendanceMatters = true;
+        attendanceUncertain = true;
+        attendanceReason = `「${weakCrit.name} ${weakCrit.percentage}%」あり。参加点・平常点は出席を含むことが多いですが断定できません`;
+      } else {
+        attendanceMatters = false;
+        attendanceReason = '成績基準に出席項目が見当たらない';
+      }
+
+      // 「合計点を四捨五入して評価」の指示を検出（否定表現は除外）
+      const roundPos = /(四捨五入|端数.{0,8}(四捨五入|処理)|round(?:ed|s|ing)?\s+(?:up\s+|down\s+)?to\s+the\s+nearest|to\s+the\s+nearest\s+(?:whole|integer|percent|point)|grades?\s+(?:are|will\s+be)\s+rounded)/i;
+      const roundNeg = /(四捨五入(?:は|を)?(?:しない|せず|行わ?ない|行いません)|not\s+rounded|no\s+rounding)/i;
+      const roundGrade = roundPos.test(norm) && !roundNeg.test(norm);
+
+      return { criteria: dedup, attendanceMatters, attendanceReason, attendanceUncertain, cutoffs, attendanceScale, roundGrade, subAssignMap };
+    },
+
+    // ── ファイル読み込み（PDF / 画像）─────────────────
+    async onSyllabusFile(event, kind) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      this.syllabusBusy = true;
+      this.syllabusStatus = kind === 'pdf' ? 'PDFを読み込み中…' : '画像をOCR中…（初回は辞書DLで時間がかかります）';
+      try {
+        const text = kind === 'pdf' ? await this.extractPdfText(file) : await this.extractImageText(file);
+        this.courseForm.syllabusText = (text || '').trim();
+        this.syllabusStatus = this.courseForm.syllabusText
+          ? '読み込み完了。内容を確認して「解析して反映」を押してください'
+          : '文字を取得できませんでした。テキスト貼り付けをお試しください';
+      } catch (e) {
+        console.error(e);
+        this.toast_('読み込みに失敗しました（オンライン接続が必要です）', 'danger');
+        this.syllabusStatus = '';
+      } finally {
+        this.syllabusBusy = false;
+        event.target.value = '';
+      }
+    },
+
+    async extractPdfText(file) {
+      await this.ensurePdfJs();
+      const buf = await file.arrayBuffer();
+      const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+      let out = '';
+      for (let i = 1; i <= pdf.numPages; i++) {
+        this.syllabusStatus = `PDF読み込み中… (${i}/${pdf.numPages}ページ)`;
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        // y座標で行を再構成（pdf.jsは文字片ごとなので、同じ高さのものを1行にまとめる）
+        const rows = [];
+        for (const it of content.items) {
+          if (!it.str) continue;
+          const y = it.transform[5], x = it.transform[4];
+          let row = rows.find(r => Math.abs(r.y - y) <= 3);
+          if (!row) { row = { y, items: [] }; rows.push(row); }
+          row.items.push({ x, str: it.str });
+        }
+        rows.sort((a, b) => b.y - a.y);   // 上から下（PDFのyは下が小さい）
+        for (const r of rows) {
+          r.items.sort((a, b) => a.x - b.x);
+          out += r.items.map(it => it.str).join(' ').replace(/[ \t]+/g, ' ').trim() + '\n';
+        }
+        out += '\n';
+      }
+      return out;
+    },
+
+    async extractImageText(file) {
+      await this.ensureTesseract();
+      const { data } = await window.Tesseract.recognize(file, 'eng+jpn', {
+        logger: msg => {
+          if (msg.status === 'recognizing text') this.syllabusStatus = `OCR中… ${Math.round(msg.progress * 100)}%`;
+        }
+      });
+      return data.text || '';
+    },
+
+    loadScript(src) {
+      return new Promise((resolve, reject) => {
+        if ([...document.scripts].some(s => s.src === src)) return resolve();
+        const s = document.createElement('script');
+        s.src = src; s.async = true;
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error('script load failed'));
+        document.head.appendChild(s);
+      });
+    },
+    async ensurePdfJs() {
+      if (!window.pdfjsLib) await this.loadScript('https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js');
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+    },
+    async ensureTesseract() {
+      if (!window.Tesseract) await this.loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
+    },
+
+    addToMaster(arr, val) {
+      val = (val || '').trim();
+      if (val && !arr.includes(val)) arr.push(val);
+    },
+    addTeacherManual() {
+      const v = (this.manageNewTeacher || '').trim();
+      if (v && !this.teacherMaster.includes(v)) { this.teacherMaster.push(v); this.saveData(); }
+      this.manageNewTeacher = '';
+    },
+    addRoomManual() {
+      const v = (this.manageNewRoom || '').trim();
+      if (v && !this.roomMaster.includes(v)) { this.roomMaster.push(v); this.saveData(); }
+      this.manageNewRoom = '';
+    },
+    // 授業フォームで教師・教室を複数追加
+    addTeacherToCourse() {
+      const v = (this.newTeacherInput || '').trim();
+      if (v && !this.courseForm.teachers.includes(v)) this.courseForm.teachers.push(v);
+      this.newTeacherInput = '';
+    },
+    addRoomToCourse() {
+      const v = (this.newRoomInput || '').trim();
+      if (v && !this.courseForm.classrooms.includes(v)) this.courseForm.classrooms.push(v);
+      this.newRoomInput = '';
+    },
+    // 表示ヘルパー（旧データの単一 teacher/classroom もフォールバック対応）
+    courseTeachers(course) {
+      if (course.teachers && course.teachers.length) return course.teachers;
+      return course.teacher ? [course.teacher] : [];
+    },
+    courseRooms(course) {
+      if (course.classrooms && course.classrooms.length) return course.classrooms;
+      return course.classroom ? [course.classroom] : [];
+    },
+    teacherText(course) { return this.courseTeachers(course).join('、'); },
+    roomText(course) { return this.courseRooms(course).join('、'); },
+
+    // ── Grade Management ──────────────────────────────
+    openAddGrade(course) {
+      this.selectedCourse = course;
+      this.gradeForm = {
+        step: this.availableAssignments(course).length > 0 ? 1 : 2,
+        sel: null,
+        assignmentId: null,
+        weight: null,
+        name: '',
+        criterionId: course.gradingCriteria[0]?.id || '',
+        maxScore: 100,
+        actualScore: null,
+        memo: '',
+        date: new Date().toISOString().slice(0,10),
+      };
+      this.seeAllAssigns = false;
+      this.view = 'addGrade';
+    },
+
+    proceedWithAssignment() {
+      const a = this.gradeForm.sel;
+      this.gradeForm.assignmentId = a.id;
+      this.gradeForm.weight      = a.weight ?? null;
+      this.gradeForm.name        = a.name;
+      this.gradeForm.criterionId = a.criterionId;
+      this.gradeForm.maxScore    = a.maxScore || 100;
+      this.gradeForm.step = 2;
+    },
+
+    editAssignment() {
+      const a = this.gradeForm.sel;
+      this.gradeForm.assignmentId = a.id;
+      this.gradeForm.weight      = a.weight ?? null;
+      this.gradeForm.name        = a.name;
+      this.gradeForm.criterionId = a.criterionId;
+      this.gradeForm.maxScore    = a.maxScore || 100;
+      this.gradeForm.sel  = null;
+      this.gradeForm.step = 2;
+    },
+
+    saveGrade() {
+      if (!this.gradeForm.name.trim())         { this.toast_('課題名を入力してください', 'danger'); return; }
+      if (!this.gradeForm.criterionId)         { this.toast_('成績基準を選択してください', 'danger'); return; }
+      if (this.gradeForm.actualScore === null || this.gradeForm.actualScore === '') {
+        this.toast_('実際の点数を入力してください', 'danger'); return;
+      }
+      this.selectedCourse.grades.push({
+        id: this.uid(),
+        assignmentId: this.gradeForm.assignmentId || null,
+        weight:      this.gradeForm.weight || null,
+        name:        this.gradeForm.name,
+        criterionId: this.gradeForm.criterionId,
+        maxScore:    this.gradeForm.maxScore,
+        actualScore: this.gradeForm.actualScore,
+        memo:        this.gradeForm.memo,
+        date:        this.gradeForm.date,
+      });
+      this.saveData();
+      this.toast_('成績を追加しました ✓', 'success');
+      this.view = 'detail';
+    },
+
+    deleteGrade(course, id) {
+      if (!confirm('この成績を削除しますか？')) return;
+      course.grades = course.grades.filter(g => g.id !== id);
+      this.saveData();
+      this.toast_('削除しました', 'secondary');
+    },
+
+    sortedGrades(course) {
+      return [...course.grades].sort((a,b) => a.date < b.date ? 1 : -1);
+    },
+
+    // 成績入力がまだの事前登録課題のみ（入力済みは非表示）
+    availableAssignments(course) {
+      return (course.assignments || []).filter(a => !(course.grades || []).some(g => g.assignmentId === a.id));
+    },
+    // see more / see less 用
+    visibleAssignments(course) {
+      const list = this.availableAssignments(course);
+      return this.seeAllAssigns ? list : list.slice(0, this.listLimit);
+    },
+    visibleGrades(course) {
+      const list = this.sortedGrades(course);
+      return this.seeAllGrades ? list : list.slice(0, this.listLimit);
+    },
+    visibleCourses() {
+      const list = this.currentTermCourses;
+      return this.seeAllCourses ? list : list.slice(0, this.listLimit);
+    },
+
+    // criteria を「すべて完了（満点）」扱いにするトグル
+    isCriterionComplete(course, cId) {
+      return (course.completedCriteria || []).includes(cId);
+    },
+    toggleCriterionComplete(course, cId) {
+      if (!course.completedCriteria) course.completedCriteria = [];
+      const i = course.completedCriteria.indexOf(cId);
+      if (i >= 0) course.completedCriteria.splice(i, 1);
+      else course.completedCriteria.push(cId);
+      this.saveData();
+    },
+
+    // 予想③: 各criteria = weight × (実点合計 / 満点合計)。未入力のcriteriaは65%と仮定
+    pooledScore(course) {
+      if (!course.gradingCriteria.length) return null;
+      const sc = course.attendanceScale;
+      const done = course.completedCriteria || [];
+      let total = 0, totW = 0;
+      for (const c of course.gradingCriteria) {
+        totW += c.percentage;
+        let rate;
+        if (sc && sc.criterionId === c.id) {
+          const r = this.criterionRate(course, c.id);
+          rate = (r === null ? (done.includes(c.id) ? 0 : 0.65) : r);
+        } else {
+          const gs = course.grades.filter(g => g.criterionId === c.id);
+          if (gs.length) {
+            const sumA = gs.reduce((s,g) => s + (+g.actualScore || 0), 0);
+            const sumM = gs.reduce((s,g) => s + (+g.maxScore || 0), 0);
+            rate = sumM > 0 ? sumA / sumM : 0;
+          } else {
+            // 完了済み=確定（点数なしは0）、未完了=65%と仮定
+            rate = done.includes(c.id) ? 0 : 0.65;
+          }
+        }
+        total += c.percentage * rate;
+      }
+      return totW > 0 ? (total / totW) * 100 : null;
+    },
+
+    // ── Attendance ────────────────────────────────────
+    totalClasses(course) {
+      // 優先順位: ①曜日カレンダー ②総授業回数を直接指定 ③週数×コマ ④学年暦の週数×コマ
+      if (course.meetingDays && course.meetingDays.length) return this.courseSessions(course).length;
+      if (course.totalClassesOverride > 0) return course.totalClassesOverride;
+      const weeks = (course.weeksOverride > 0) ? course.weeksOverride : (this.termDefs[course.term]?.weeks || 0);
+      return (course.weeklyClasses || 0) * weeks;
+    },
+    totalClassesSource(course) {
+      if (course.meetingDays && course.meetingDays.length) return 'カレンダーの曜日から';
+      if (course.totalClassesOverride > 0) return '総授業回数を直接指定';
+      if (course.weeksOverride > 0) return `${course.weeksOverride}週 × 週${course.weeklyClasses||0}コマ`;
+      return `学年暦${this.termDefs[course.term]?.weeks||0}週 × 週${course.weeklyClasses||0}コマ`;
+    },
+
+    // ── 授業カレンダー ──────────────────────────────
+    fmtDate(d) {
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    },
+    courseSessions(course) {
+      const days = course.meetingDays || [];
+      const td = this.termDefs[course.term];
+      if (!days.length || !td) return [];
+      const out = [];
+      const end = new Date(td.end + 'T00:00:00');
+      for (let d = new Date(td.start + 'T00:00:00'); d <= end; d.setDate(d.getDate() + 1)) {
+        if (days.includes(d.getDay())) out.push(this.fmtDate(d));
+      }
+      return out;
+    },
+    fmtSessionLabel(dstr) {
+      const dt = new Date(dstr + 'T00:00:00');
+      return `${dt.getMonth()+1}/${dt.getDate()} (${this.weekdayLabels[dt.getDay()]})`;
+    },
+    toggleMeetingDay(i) {
+      if (!this.courseForm.meetingDays) this.courseForm.meetingDays = [];
+      const idx = this.courseForm.meetingDays.indexOf(i);
+      if (idx >= 0) this.courseForm.meetingDays.splice(idx, 1);
+      else { this.courseForm.meetingDays.push(i); this.courseForm.meetingDays.sort((a,b) => a - b); }
+    },
+    sessionStatusOf(course, d) {
+      return (course.sessionStatus && course.sessionStatus[d]) || 'present';
+    },
+    setSessionStatus(course, d, status) {
+      if (!course.sessionStatus) course.sessionStatus = {};
+      if (status === 'present') delete course.sessionStatus[d];
+      else course.sessionStatus[d] = status;
+      this.recomputeAttendance(course);
+      this.saveData();
+    },
+    recomputeAttendance(course) {
+      if (!(course.meetingDays && course.meetingDays.length)) return;
+      const st = course.sessionStatus || {};
+      let cancelled = 0, absent = 0, late = 0;
+      for (const d of this.courseSessions(course)) {
+        const s = st[d];
+        if (s === 'cancelled') cancelled++;
+        else if (s === 'absent') absent++;
+        else if (s === 'late') late++;
+      }
+      course.cancelledClasses = cancelled;
+      course.absences = absent;
+      course.lates = late;
+    },
+
+    attRateNum(course) {
+      const tot = this.totalClasses(course);
+      const eff = tot - (course.cancelledClasses || 0);
+      const att = eff - (course.absences || 0);
+      return eff > 0 ? att / eff * 100 : 100;
+    },
+
+    attRate(course) { return this.attRateNum(course).toFixed(1); },
+
+    // ── Helpers ───────────────────────────────────────
+    criterionById(course, id) { return course.gradingCriteria.find(c => c.id === id); },
+    criterionName(course, id) { return this.criterionById(course, id)?.name || '―'; },
+
+    gradeColor(grade) {
+      if (!grade) return '';
+      if (grade.startsWith('A')) return 'grade-A';
+      if (grade.startsWith('B')) return 'grade-B';
+      if (grade.startsWith('C')) return 'grade-C';
+      if (grade === 'D')         return 'grade-D';
+      return 'grade-F';
+    },
+
+    rateColor(rate) {
+      if (rate >= 0.9)  return 'text-primary fw-semibold';
+      if (rate >= 0.8)  return 'text-success';
+      if (rate >= 0.7)  return 'text-warning';
+      return 'text-danger';
+    },
+
+    fillColor(score) {
+      if (score === null || score === undefined) return 'bg-secondary';
+      if (score >= 90)  return 'bg-primary';   // A
+      if (score >= 80)  return 'bg-success';   // B
+      if (score >= 70)  return 'bg-warning';   // C
+      if (score >= 60)  return 'bg-info';      // D
+      return 'bg-danger';                      // E
+    },
+
+    // criteria バー色：未評価（grades無し）は灰色、評価済みは得点率の水準で色分け
+    criterionBarColor(course, cId) {
+      const r = this.criterionRate(course, cId);
+      return this.fillColor(r === null ? null : r * 100);
+    },
+
+    typeColor(type) {
+      return {
+        ELA:      'bg-primary',
+        JLP:      'bg-success',
+        GEN:      'bg-info',
+        FND:      'bg-warning',
+        MAJOR:    'bg-danger',
+        MINOR:    'bg-secondary',
+        ELECTIVE: 'bg-dark',
+        PEX:      'bg-secondary',
+      }[type] || 'bg-secondary';
+    },
+
+    uid() {
+      return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
+    },
+
+    saveData() {
+      // localStorage にキャッシュ（オフライン用）
+      localStorage.setItem('gpa_courses', JSON.stringify(this.courses));
+      localStorage.setItem('gpa_term', this.currentTerm);
+      localStorage.setItem('gpa_teachers', JSON.stringify(this.teacherMaster));
+      localStorage.setItem('gpa_rooms', JSON.stringify(this.roomMaster));
+      // ログイン中はクラウドへ（連打を避けるためデバウンス）。リモート反映中は除く
+      if (supa && this.user && !this.isApplyingRemote) {
+        clearTimeout(this.saveTimer);
+        this.saveTimer = setTimeout(() => this.pushCloud(), 800);
+      }
+    },
+
+    loadLocal() {
+      this.isApplyingRemote = true;
+      try {
+        const c = localStorage.getItem('gpa_courses');
+        const t = localStorage.getItem('gpa_term');
+        const tm = localStorage.getItem('gpa_teachers');
+        const rm = localStorage.getItem('gpa_rooms');
+        if (c) this.courses = JSON.parse(c);
+        if (t) this.currentTerm = t;
+        if (tm) this.teacherMaster = JSON.parse(tm);
+        if (rm) this.roomMaster = JSON.parse(rm);
+        // 既存授業の教師・教室は初回のみ候補に取り込む（以後はユーザーの削除を尊重）
+        if (!localStorage.getItem('gpa_master_seeded')) {
+          for (const course of this.courses) {
+            this.courseTeachers(course).forEach(t => this.addToMaster(this.teacherMaster, t));
+            this.courseRooms(course).forEach(r => this.addToMaster(this.roomMaster, r));
+          }
+          localStorage.setItem('gpa_master_seeded', '1');
+        }
+      } catch(e) { console.error(e); }
+      this.$nextTick(() => { this.isApplyingRemote = false; });
+    },
+
+    // ── 認証・クラウド同期 ──────────────────────────────
+    async initAuth() {
+      if (!supa) { this.loadLocal(); this.authReady = true; return; }
+      try {
+        const { data } = await supa.auth.getSession();
+        this.user = data.session ? data.session.user : null;
+        if (this.user) await this.loadCloud();
+      } catch (e) { console.error(e); }
+      this.authReady = true;
+      // 以降のログイン状態変化（別タブ・別端末からのサインアウト等）
+      supa.auth.onAuthStateChange((event, session) => {
+        const newUser = session ? session.user : null;
+        const prevId = this.user && this.user.id;
+        const newId = newUser && newUser.id;
+        this.user = newUser;
+        if (newUser && newId !== prevId) this.loadCloud();
+        if (!newUser) { this.unsubscribeRealtime(); this.resetToEmpty(); }
+      });
+    },
+
+    async signIn() {
+      this.authBusy = true; this.authError = ''; this.authNotice = '';
+      localStorage.setItem(REMEMBER_KEY, this.authRemember ? '1' : '0');
+      const { error } = await supa.auth.signInWithPassword({ email: this.authEmail.trim(), password: this.authPassword });
+      this.authBusy = false;
+      if (error) { this.authError = this.authMsg(error); return; }
+      this.authPassword = '';   // ログイン成功 → onAuthStateChange がデータを読み込む
+    },
+
+    async signUp() {
+      this.authBusy = true; this.authError = ''; this.authNotice = '';
+      localStorage.setItem(REMEMBER_KEY, this.authRemember ? '1' : '0');
+      const { data, error } = await supa.auth.signUp({ email: this.authEmail.trim(), password: this.authPassword });
+      this.authBusy = false;
+      if (error) { this.authError = this.authMsg(error); return; }
+      if (!data.session) {
+        this.authNotice = '確認メールを送信しました。メール内のリンクを開いた後でログインしてください。';
+        this.authMode = 'login';
+      }
+      this.authPassword = '';
+    },
+
+    async signOut() {
+      if (!supa) return;
+      await supa.auth.signOut();
+      this.view = 'home';
+      this.toast_('ログアウトしました', 'secondary');
+    },
+
+    authMsg(error) {
+      const m = (error && error.message) || '';
+      if (/Invalid login/i.test(m)) return 'メールアドレスまたはパスワードが違います';
+      if (/already registered/i.test(m)) return 'このメールは登録済みです。ログインしてください';
+      if (/at least 6/i.test(m) || /Password should/i.test(m)) return 'パスワードは6文字以上にしてください';
+      if (/valid email/i.test(m)) return 'メールアドレスの形式が正しくありません';
+      return m || 'エラーが発生しました';
+    },
+
+    stateBlob() {
+      return {
+        courses: this.courses,
+        currentTerm: this.currentTerm,
+        teacherMaster: this.teacherMaster,
+        roomMaster: this.roomMaster,
+      };
+    },
+
+    applyState(s) {
+      this.isApplyingRemote = true;
+      this.courses = Array.isArray(s.courses) ? s.courses : [];
+      this.currentTerm = s.currentTerm || 'spring';
+      this.teacherMaster = Array.isArray(s.teacherMaster) ? s.teacherMaster : [];
+      this.roomMaster = Array.isArray(s.roomMaster) ? s.roomMaster : [];
+      this.$nextTick(() => { this.isApplyingRemote = false; });
+    },
+
+    resetToEmpty() {
+      this.isApplyingRemote = true;
+      this.courses = [];
+      this.teacherMaster = [];
+      this.roomMaster = [];
+      this.$nextTick(() => { this.isApplyingRemote = false; });
+    },
+
+    async loadCloud() {
+      if (!supa || !this.user) return;
+      try {
+        const { data, error } = await supa.from('app_state').select('data').eq('user_id', this.user.id).maybeSingle();
+        if (error) throw error;
+        if (data && data.data && Object.keys(data.data).length) {
+          this.applyState(data.data);
+        } else {
+          // クラウドに未保存 → この端末の既存データを移行アップロード
+          this.loadLocal();
+          await this.pushCloud();
+          this.toast_('この端末のデータをアカウントに保存しました', 'success');
+        }
+      } catch (e) {
+        console.error(e);
+        this.toast_('クラウド読み込みに失敗。ローカルのデータを表示します', 'danger');
+        this.loadLocal();
+      }
+      this.subscribeRealtime();
+    },
+
+    async pushCloud() {
+      if (!supa || !this.user) return;
+      this.saving = true;
+      const ts = new Date().toISOString();
+      this.lastSelfWriteAt = ts;
+      try {
+        const { error } = await supa.from('app_state')
+          .upsert({ user_id: this.user.id, data: this.stateBlob(), updated_at: ts });
+        if (error) throw error;
+      } catch (e) {
+        console.error(e);
+        this.toast_('クラウド保存に失敗しました（接続を確認）', 'danger');
+      }
+      this.saving = false;
+    },
+
+    // 他端末の変更をライブ反映（Supabase Realtime）
+    subscribeRealtime() {
+      if (!supa || !this.user) return;
+      this.unsubscribeRealtime();
+      this.realtimeStatus = 'connecting';
+      realtimeChannel = supa
+        .channel('app_state:' + this.user.id)
+        .on('postgres_changes',
+          { event: '*', schema: 'public', table: 'app_state', filter: 'user_id=eq.' + this.user.id },
+          (payload) => {
+            const row = payload.new;
+            if (!row || !row.data) return;
+            // 自分の書き込みの反射は無視（タイムスタンプを時刻として比較）
+            if (this.lastSelfWriteAt && row.updated_at &&
+                new Date(row.updated_at).getTime() === new Date(this.lastSelfWriteAt).getTime()) return;
+            this.applyState(row.data);
+            this.toast_('別の端末の変更を反映しました 🔄', 'secondary');
+          })
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') this.realtimeStatus = 'connected';
+          else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') this.realtimeStatus = 'error';
+          else if (status === 'CLOSED') this.realtimeStatus = 'off';
+        });
+    },
+
+    unsubscribeRealtime() {
+      if (realtimeChannel && supa) { supa.removeChannel(realtimeChannel); realtimeChannel = null; }
+      this.realtimeStatus = 'off';
+    },
+
+    toast_(msg, type='success') {
+      this.toast = { msg, type };
+      setTimeout(() => { this.toast = null; }, 3000);
+    },
+  },
+
+  mounted() {
+    this.initAuth();
+    // ブラウザの戻る／スマホの戻るスワイプ／マウスの戻るボタンでホームへ
+    history.replaceState({ gpastimate: 'home' }, '');
+    window.addEventListener('popstate', () => {
+      if (this.view !== 'home') this.view = 'home';
+    });
+  },
+
+  watch: {
+    courses:     { deep: true, handler() { this.saveData(); } },
+    currentTerm: { handler() { this.saveData(); } },
+    // ホーム→サブ画面に入ったら履歴を1つ積む。戻る操作でホームへ戻す
+    view(newV, oldV) {
+      if (newV !== 'home' && oldV === 'home') {
+        history.pushState({ gpastimate: 'sub' }, '');
+      } else if (newV === 'home' && oldV !== 'home' && history.state && history.state.gpastimate === 'sub') {
+        history.back();
+      }
+    },
+  },
+}).mount('#app');
+</script>
+</body>
+</html>
