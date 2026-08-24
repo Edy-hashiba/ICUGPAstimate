@@ -578,6 +578,58 @@
       <div class="form-text mt-1">{{ t('mg.courseDataSteps1') }} <code>courses-data.js</code> {{ t('mg.courseDataSteps2') }}</div>
     </div>
 
+    <!-- 学年暦（全ユーザー共通・管理者のみ編集可） -->
+    <div class="card p-3 mb-3" style="border-radius:14px">
+      <div class="section-label">{{ t('mg.calTitle') }}</div>
+      <div class="small text-muted mb-2">{{ t('mg.calDesc') }}</div>
+
+      <!-- 現在の学年暦 -->
+      <div v-if="!calDraft">
+        <div v-for="(d,k) in termDefs" :key="k" class="d-flex justify-content-between align-items-start py-1"
+             style="border-bottom:1px solid #f1f3f9">
+          <div class="fw-bold small" style="min-width:6.5rem">{{ d.name }}</div>
+          <div class="small text-end">
+            <div v-for="(rg,i) in d.ranges" :key="i">{{ rg.start }} 〜 {{ rg.end }}</div>
+            <div class="text-muted">{{ t('mg.weeksParen', d.weeks) }}</div>
+          </div>
+        </div>
+        <div class="small text-muted mt-2">
+          <span v-if="calSource === 'cloud'">{{ t('mg.calFromCloud') }}<span v-if="calUpdatedAt"> · {{ calUpdatedAt.slice(0,10) }}</span></span>
+          <span v-else-if="calSource === 'cache'">{{ t('mg.calFromCache') }}</span>
+          <span v-else>{{ t('mg.calFromBuiltin') }}</span>
+        </div>
+        <button v-if="isAdmin" class="btn btn-sm btn-outline-primary mt-2" @click="startCalEdit()">{{ t('mg.calEdit') }}</button>
+        <div v-else-if="cloudOn" class="small text-muted mt-2">{{ t('mg.calNotAdmin') }}</div>
+      </div>
+
+      <!-- 編集フォーム -->
+      <div v-else>
+        <div v-for="t_ in calDraft" :key="t_.key" class="mb-3 pb-2" style="border-bottom:1px solid #f1f3f9">
+          <div class="fw-bold small mb-1">{{ t_.name }}</div>
+          <div v-for="(rg,i) in t_.ranges" :key="i" class="d-flex align-items-center gap-2 mb-1">
+            <input v-model="rg.start" type="date" class="form-control form-control-sm" style="max-width:160px">
+            <span class="small text-muted">〜</span>
+            <input v-model="rg.end" type="date" class="form-control form-control-sm" style="max-width:160px">
+            <button class="btn btn-sm btn-outline-danger" @click="calRemoveRange(t_, i)">{{ t('cd.delete') }}</button>
+          </div>
+          <div class="d-flex align-items-center gap-2 mt-1">
+            <button class="btn btn-sm btn-outline-primary" @click="calAddRange(t_)">{{ t('mg.calAddRange') }}</button>
+            <span class="small" :class="calDraftError(t_) ? 'text-danger' : 'text-muted'">
+              {{ calDraftError(t_) || t('mg.calWeeksAuto', calDraftWeeks(t_)) }}
+            </span>
+          </div>
+        </div>
+        <div v-if="calMsg" class="alert alert-danger py-2 px-3 small mb-2">{{ calMsg }}</div>
+        <div class="small text-muted mb-2">{{ t('mg.calSaveNote') }}</div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-sm btn-primary" :disabled="calBusy" @click="saveCalendar()">
+            <span v-if="calBusy" class="spinner-border spinner-border-sm me-1"></span>{{ t('mg.calSave') }}
+          </button>
+          <button class="btn btn-sm btn-outline-secondary" :disabled="calBusy" @click="calDraft=null; calMsg=''">{{ t('cf.cancel') }}</button>
+        </div>
+      </div>
+    </div>
+
     <!-- C-week期間 -->
     <div class="card p-3 mb-3" style="border-radius:14px">
       <div class="section-label">{{ t('mg.cweekTitle') }}</div>
@@ -2036,6 +2088,23 @@ const I18N = {
     'mg.clearImport': 'この端末の取込を消す',
     'mg.courseDataSteps1': '手順：貼り付け→「解析」で件数確認→「書き出し」で',
     'mg.courseDataSteps2': 'を保存→アプリのフォルダに置く（差し替え）。',
+    'mg.calTitle': '🗓 学年暦（学期の期間）',
+    'mg.calDesc': '出席がカウントされる期間です。全員に共通で、ここを変えると通知の判定にもそのまま反映されます。',
+    'mg.calEdit': '✏️ 学年暦を編集',
+    'mg.calAddRange': '＋ 期間を追加',
+    'mg.calSave': '保存して全員に反映',
+    'mg.calSaveNote': '保存すると全ユーザーに反映されます（各自が次にアプリを開いたとき）。通知の判定も自動で切り替わるので、再デプロイは不要です。',
+    'mg.calWeeksAuto': (w) => `自動計算: ${w}週`,
+    'mg.calFromCloud': '全員共通の学年暦を使用中',
+    'mg.calFromCache': '保存済みの学年暦を使用中（オフライン）',
+    'mg.calFromBuiltin': 'アプリ内蔵の初期値を使用中（Supabaseのセットアップ前）',
+    'mg.calNotAdmin': '編集は管理者のみ可能です。',
+    'mg.calErrNoRange': '期間を1つ以上入れてください',
+    'mg.calErrEmpty': '未入力の日付があります',
+    'mg.calErrOrder': '開始日が終了日より後になっています',
+    'mg.calErrOverlap': '期間が重なっています',
+    'mg.calErrLogin': 'ログインが必要です',
+    'mg.calErrDenied': '保存できませんでした（編集権限がありません）',
     'mg.cweekTitle': '📆 C-week期間',
     'mg.cweekDesc': '大学が指定する変則時間割の週（C-week）の期間を登録すると、出席確認通知の時刻がその週だけ自動で切り替わります。年度ごとに大学の発表に合わせて追加してください。',
     'mg.addCweek': '＋ C-week期間を追加',
@@ -2133,6 +2202,7 @@ const I18N = {
     'js.registerCourseFirst': '先に授業を登録してください',
     'js.tipsWillShow': '各画面に移動すると説明が表示されます',
     'js.loggedOut': 'ログアウトしました',
+    'js.calSaved': '学年暦を保存しました（全員に反映されます）',
     'js.authInvalidLogin': 'メールアドレスまたはパスワードが違います',
     'js.authAlreadyRegistered': 'このメールは登録済みです。ログインしてください',
     'js.authPwTooShort': 'パスワードは6文字以上にしてください',
@@ -2525,6 +2595,23 @@ const I18N = {
     'mg.clearImport': 'Clear this device’s import',
     'mg.courseDataSteps1': 'Steps: paste → "Parse" to check the count → "Export" to save',
     'mg.courseDataSteps2': 'and place it in the app folder (replacing the old one).',
+    'mg.calTitle': '🗓 Academic Calendar (term dates)',
+    'mg.calDesc': 'The periods attendance is counted for. Shared by everyone, and notifications follow these dates automatically.',
+    'mg.calEdit': '✏️ Edit calendar',
+    'mg.calAddRange': '+ Add period',
+    'mg.calSave': 'Save for everyone',
+    'mg.calSaveNote': 'Saving applies to all users the next time they open the app. Notification timing updates automatically too, so no redeploy is needed.',
+    'mg.calWeeksAuto': (w) => `Auto: ${w} weeks`,
+    'mg.calFromCloud': 'Using the shared calendar',
+    'mg.calFromCache': 'Using the saved calendar (offline)',
+    'mg.calFromBuiltin': "Using the app's built-in defaults (Supabase not set up yet)",
+    'mg.calNotAdmin': 'Only admins can edit this.',
+    'mg.calErrNoRange': 'Add at least one period',
+    'mg.calErrEmpty': 'Some dates are empty',
+    'mg.calErrOrder': 'Start date is after the end date',
+    'mg.calErrOverlap': 'Periods overlap',
+    'mg.calErrLogin': 'You need to be signed in',
+    'mg.calErrDenied': "Couldn't save (you don't have edit permission)",
     'mg.cweekTitle': '📆 C-Week Periods',
     'mg.cweekDesc': 'Register the date ranges for C-weeks (the university’s irregular-schedule weeks) and the attendance notification times will automatically switch for those weeks. Add new ones each year as the university announces them.',
     'mg.addCweek': '+ Add a C-week period',
@@ -2622,6 +2709,7 @@ const I18N = {
     'js.registerCourseFirst': 'Please register a course first',
     'js.tipsWillShow': 'Tips will appear as you visit each screen',
     'js.loggedOut': 'Logged out',
+    'js.calSaved': 'Academic calendar saved (applies to everyone)',
     'js.authInvalidLogin': 'Incorrect email or password',
     'js.authAlreadyRegistered': 'This email is already registered. Please log in instead',
     'js.authPwTooShort': 'Password must be at least 6 characters',
@@ -2745,13 +2833,21 @@ createApp({
       newRoomInput: '',
 
       // 学期＝出席がカウントされる期間。途中に休みが入るのでranges（複数区間）で持つ。
-      // 出席は月〜土の授業のみカウント（日曜は授業なし）。
-      // 送信側Edge Functionにも同じ内容を複製しているので、変えるときは両方を直すこと。
+      // 出席は月〜土の授業のみカウント（日曜は授業なし）。weeksはrangesから自動計算される。
+      // ここにあるのは「読み込みに失敗したとき用の既定値」で、通常はSupabaseの
+      // academic_calendarテーブル（全ユーザー共通）の内容で上書きされる。
+      // 学年暦を変えるときはコードではなく、管理画面の「学年暦」から編集すること。
       termDefs: {
         spring: { name: 'Spring Term', weeks: 9,  ranges: [{ start: '2027-04-10', end: '2027-04-30' }, { start: '2027-05-06', end: '2027-06-16' }] },
         autumn: { name: 'Autumn Term', weeks: 9,  ranges: [{ start: '2026-09-05', end: '2026-10-09' }, { start: '2026-10-14', end: '2026-11-10' }] },
         winter: { name: 'Winter Term', weeks: 10, ranges: [{ start: '2026-12-04', end: '2026-12-22' }, { start: '2027-01-06', end: '2027-02-22' }] },
       },
+      calUpdatedAt: '',      // 学年暦の最終更新日時（Supabaseから読めたとき）
+      calSource: 'builtin',  // builtin | cache | cloud
+      isAdmin: false,        // 学年暦を編集できるユーザーか
+      calDraft: null,        // 学年暦エディタの編集中データ
+      calBusy: false,
+      calMsg: '',
 
       // 時限→時刻（出席確認通知の判定に使用）。送信側Edge Functionにも同じ内容を複製しているので、
       // 時刻を変える場合は両方を直すこと。
@@ -4467,6 +4563,130 @@ createApp({
       }
       return false;
     },
+
+    // ── 学年暦（全ユーザー共通・Supabaseのacademic_calendarから読む） ──────
+    // ある曜日が期間中に何回来るか（月=1〜土=6）
+    rangeDayCount(ranges, day) {
+      let n = 0;
+      for (const rg of ranges) {
+        const end = new Date(rg.end + 'T00:00:00');
+        for (let d = new Date(rg.start + 'T00:00:00'); d <= end; d.setDate(d.getDate() + 1)) {
+          if (d.getDay() === day) n++;
+        }
+      }
+      return n;
+    },
+    // 週数＝いちばん多い曜日の回数。週数×コマ数で総授業回数を出す用途なので最大を採る
+    weeksFromRanges(ranges) {
+      let mx = 0;
+      for (let d = 1; d <= 6; d++) mx = Math.max(mx, this.rangeDayCount(ranges, d));
+      return mx;
+    },
+    // 受け取った学年暦データを検証して termDefs に反映。壊れたデータで画面が死なないよう、
+    // 3学期すべてが揃って形式も正しいときだけ差し替える（1つでもおかしければ何もしない）
+    applyCalendar(terms) {
+      if (!terms || typeof terms !== 'object') return false;
+      const ymd = /^\d{4}-\d{2}-\d{2}$/;
+      const out = {};
+      for (const k of ['spring', 'autumn', 'winter']) {
+        const t = terms[k];
+        if (!t || !Array.isArray(t.ranges) || !t.ranges.length) return false;
+        for (const r of t.ranges) {
+          if (!r || !ymd.test(r.start || '') || !ymd.test(r.end || '') || r.start > r.end) return false;
+        }
+        const ranges = t.ranges.map(r => ({ start: r.start, end: r.end })).sort((a, b) => (a.start < b.start ? -1 : 1));
+        out[k] = { name: t.name || this.termDefs[k].name, ranges, weeks: this.weeksFromRanges(ranges) };
+      }
+      this.termDefs = out;
+      return true;
+    },
+    // 起動時：まずキャッシュを当てて即表示 → その後クラウドの最新で上書き（オフラインでも動く）
+    async loadCalendar() {
+      try {
+        const c = JSON.parse(localStorage.getItem('gpa_calendar') || 'null');
+        if (c && this.applyCalendar(c)) this.calSource = 'cache';
+      } catch (e) {}
+      if (!supa) return;
+      try {
+        const { data } = await supa.from('academic_calendar').select('terms, updated_at').eq('id', 1).maybeSingle();
+        if (data && this.applyCalendar(data.terms)) {
+          this.calSource = 'cloud';
+          this.calUpdatedAt = data.updated_at || '';
+          localStorage.setItem('gpa_calendar', JSON.stringify(data.terms));
+          this.initHomeWeek();
+        }
+      } catch (e) {}
+    },
+    // 学年暦を編集できるユーザーか（app_adminsに自分の行があるか）
+    async checkAdmin() {
+      this.isAdmin = false;
+      if (!supa || !this.user) return;
+      try {
+        const { data } = await supa.from('app_admins').select('user_id').eq('user_id', this.user.id).maybeSingle();
+        this.isAdmin = !!data;
+      } catch (e) {}
+    },
+    // ── 学年暦エディタ（管理画面・管理者のみ） ────────────────────
+    startCalEdit() {
+      this.calMsg = '';
+      this.calDraft = ['spring', 'autumn', 'winter'].map(k => ({
+        key: k,
+        name: this.termDefs[k].name,
+        ranges: this.termDefs[k].ranges.map(r => ({ start: r.start, end: r.end })),
+      }));
+    },
+    calAddRange(t) { t.ranges.push({ start: '', end: '' }); this.calMsg = ''; },
+    calRemoveRange(t, i) { t.ranges.splice(i, 1); this.calMsg = ''; },
+    // 入力途中でも落ちないよう、日付が揃っている区間だけで週数を出す
+    calDraftWeeks(t) {
+      const ok = t.ranges.filter(r => r.start && r.end && r.start <= r.end);
+      return ok.length ? this.weeksFromRanges(ok) : 0;
+    },
+    // 保存前チェック。問題があればその説明を返す（無ければ空文字）
+    calDraftError(t) {
+      if (!t.ranges.length) return this.t('mg.calErrNoRange');
+      for (const r of t.ranges) {
+        if (!r.start || !r.end) return this.t('mg.calErrEmpty');
+        if (r.start > r.end) return this.t('mg.calErrOrder');
+      }
+      const sorted = [...t.ranges].sort((a, b) => (a.start < b.start ? -1 : 1));
+      for (let i = 1; i < sorted.length; i++) {
+        if (sorted[i].start <= sorted[i - 1].end) return this.t('mg.calErrOverlap');
+      }
+      return '';
+    },
+    async saveCalendar() {
+      for (const t of this.calDraft) {
+        const err = this.calDraftError(t);
+        if (err) { this.calMsg = `${t.name}: ${err}`; return; }
+      }
+      const terms = {};
+      for (const t of this.calDraft) {
+        terms[t.key] = { name: t.name, ranges: t.ranges.map(r => ({ start: r.start, end: r.end })) };
+      }
+      if (!supa || !this.user) { this.calMsg = this.t('mg.calErrLogin'); return; }
+      this.calBusy = true;
+      this.calMsg = '';
+      try {
+        const now = new Date().toISOString();
+        const { data, error } = await supa.from('academic_calendar')
+          .update({ terms, updated_at: now }).eq('id', 1).select();
+        if (error) throw error;
+        // RLSで弾かれると、エラーではなく「0行更新」で返ってくるので明示的に確認する
+        if (!data || !data.length) { this.calMsg = this.t('mg.calErrDenied'); return; }
+        this.applyCalendar(terms);
+        this.calSource = 'cloud';
+        this.calUpdatedAt = now;
+        localStorage.setItem('gpa_calendar', JSON.stringify(terms));
+        this.initHomeWeek();
+        this.calDraft = null;
+        this.toast_(this.t('js.calSaved'), 'success');
+      } catch (e) {
+        this.calMsg = (e && e.message) || String(e);
+      } finally {
+        this.calBusy = false;
+      }
+    },
     // scheduleCells（時限グリッド）優先、未設定の旧コースはmeetingDaysにフォールバック
     courseScheduleDays(course) {
       if (course.scheduleCells && course.scheduleCells.length) {
@@ -4725,7 +4945,7 @@ createApp({
       try {
         const { data } = await supa.auth.getSession();
         this.user = data.session ? data.session.user : null;
-        if (this.user) await this.loadCloud();
+        if (this.user) { await this.loadCloud(); this.checkAdmin(); }
       } catch (e) { console.error(e); }
       this.authReady = true;
       // 以降のログイン状態変化（別タブ・別端末からのサインアウト等）
@@ -4736,6 +4956,7 @@ createApp({
         const newId = newUser && newUser.id;
         this.user = newUser;
         if (newUser && newId !== prevId && !this.recoveryMode) this.loadCloud();
+        if (newUser) this.checkAdmin(); else this.isAdmin = false;
         if (!newUser) { this.unsubscribeRealtime(); this.resetToEmpty(); }
       });
     },
@@ -5172,6 +5393,7 @@ createApp({
   mounted() {
     this.loadAiSettings();
     this.loadCourseMaster();
+    this.loadCalendar();
     this.initAuth();
     this.refreshNotifState();
     this.initHomeWeek();
