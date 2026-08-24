@@ -112,6 +112,10 @@
     .tut-pos-bottom { bottom: 22px; transform: translateX(-50%); }
     .tut-pos-top { top: 22px; transform: translateX(-50%); }
     .tut-spotlight { position: fixed; z-index: 1081; border-radius: 12px; pointer-events: none; outline: 3px solid #1a56db; box-shadow: 0 0 0 9999px rgba(15,23,42,.55); animation: tutPulse 1.4s ease-in-out infinite; }
+    /* スポットライトの穴の周囲4枚に敷く透明な入力ブロッカー（説明デモ中は光っている要素以外を操作不可にする） */
+    .tut-blocker { position: fixed; z-index: 1081; }
+    /* 文字入力中（スマホはキーボードで画面が狭くなる）は暗幕とパルスを消し、枠線だけ残す */
+    .tut-spotlight.typing { box-shadow: none; animation: none; }
     @keyframes tutPulse { 0% { box-shadow: 0 0 0 9999px rgba(15,23,42,.55), 0 0 0 0 rgba(37,99,235,.55); } 70% { box-shadow: 0 0 0 9999px rgba(15,23,42,.55), 0 0 0 16px rgba(37,99,235,0); } 100% { box-shadow: 0 0 0 9999px rgba(15,23,42,.55), 0 0 0 0 rgba(37,99,235,0); } }
     .tutorial-dots { display: flex; gap: 6px; justify-content: center; margin: 14px 0; }
     .tutorial-dot { width: 8px; height: 8px; border-radius: 50%; background: #d1d5db; transition: .2s; }
@@ -127,6 +131,9 @@
     .sched-cell:hover { border-color: #b8c8f0; }
     .sched-cell.on { background: #1a56db; border-color: #1a56db; }
     .sched-cell.empty { cursor: default; background: #fbfcfe; border-color: #e9ecf3; }
+    /* 学期の休み期間にあたる日（授業なし・出席の対象外） */
+    .sched-cell.off-term { cursor: default; background: #eef0f5; border-color: #e2e5ec; }
+    .sched-cell.off-term .sched-date, .sched-cell.off-term .sched-room { color: #94a3b8; font-weight: 500; }
     .sched-cell.sel { outline: 2.5px solid #1a56db; outline-offset: 1px; }
     .sched-cell.bg-success { background-color: #22c55e !important; }
     .sched-cell .sched-date { font-size: .64rem; font-weight: 600; color: #fff; text-align: center; line-height: 1.15; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -268,14 +275,17 @@
         <div class="position-relative">
         <button class="btn btn-outline-secondary btn-sm" @click="showTermSel=!showTermSel">
           {{ termDefs[currentTerm].name }}
-          <span class="text-muted ms-1">{{ termDefs[currentTerm].start.slice(0,7) }}〜{{ termDefs[currentTerm].end.slice(0,7) }}</span>
+          <span class="text-muted ms-1">{{ termStart(currentTerm).slice(0,7) }}〜{{ termEnd(currentTerm).slice(0,7) }}</span>
           ▾
         </button>
         <div class="term-dropdown" v-if="showTermSel">
           <div v-for="(d,k) in termDefs" :key="k" class="term-option" :class="{active:currentTerm===k}"
                @click="currentTerm=k; showTermSel=false; saveData()">
             <div>{{ d.name }}</div>
-            <div style="font-size:.78rem;color:#6b7280">{{ d.start }} 〜 {{ d.end }} {{ t('mg.weeksParen', d.weeks) }}</div>
+            <div style="font-size:.78rem;color:#6b7280">
+              <div v-for="(rg,i) in d.ranges" :key="i">{{ rg.start }} 〜 {{ rg.end }}</div>
+              <div>{{ t('mg.weeksParen', d.weeks) }}</div>
+            </div>
           </div>
         </div>
         </div>
@@ -396,7 +406,7 @@
               <div class="sched-rowtime">{{ periodTimes.normal[p][0] }}-{{ periodTimes.normal[p][1] }}</div>
             </div>
             <template v-for="d in gridDays" :key="p+'-'+d">
-              <div v-if="homeCourseAt(d,p)" class="sched-cell"
+              <div v-if="homeCourseAt(d,p) && inTerm(weekCellDate(d, homeWeekStart), currentTerm)" class="sched-cell"
                 :class="[sessionOpts.find(o => o.v === sessionStatusOf(homeCourseAt(d,p), weekCellDate(d, homeWeekStart))).cls.replace('btn-','bg-'),
                          sessionStatusOf(homeCourseAt(d,p), weekCellDate(d, homeWeekStart)) === 'late' ? 'text-dark' : 'text-white',
                          (homeAttCourseId === homeCourseAt(d,p).id && homeAttDate === weekCellDate(d, homeWeekStart)) ? 'sel' : '']"
@@ -404,6 +414,9 @@
                 @click="selectHomeCell(homeCourseAt(d,p), weekCellDate(d, homeWeekStart))">
                 <div class="sched-date">{{ courseDisplayName(homeCourseAt(d,p)) }}</div>
                 <div v-if="cellRoom(homeCourseAt(d,p), d, p)" class="sched-room">{{ cellRoom(homeCourseAt(d,p), d, p) }}</div>
+              </div>
+              <div v-else-if="homeCourseAt(d,p)" class="sched-cell off-term" :title="t('grid.noClassDay')">
+                <div class="sched-date">{{ courseDisplayName(homeCourseAt(d,p)) }}</div>
               </div>
               <div v-else class="sched-cell empty"></div>
             </template>
@@ -1247,11 +1260,14 @@
                 <div class="sched-rowtime">{{ periodTimes.normal[p][0] }}-{{ periodTimes.normal[p][1] }}</div>
               </div>
               <template v-for="d in gridDays" :key="p+'-'+d">
-                <div v-if="isCellOn(selectedCourse.scheduleCells, d, p)" class="sched-cell"
+                <div v-if="isCellOn(selectedCourse.scheduleCells, d, p) && inTerm(weekCellDate(d), selectedCourse.term)" class="sched-cell"
                   :class="[sessionOpts.find(o => o.v === sessionStatusOf(selectedCourse, weekCellDate(d))).cls.replace('btn-','bg-'),
                            sessionStatusOf(selectedCourse, weekCellDate(d)) === 'late' ? 'text-dark' : 'text-white',
                            attSelectedDate === weekCellDate(d) ? 'sel' : '']"
                   @click="attSelectedDate = (attSelectedDate === weekCellDate(d) ? '' : weekCellDate(d))">
+                  <div class="sched-date">{{ weekCellDate(d).slice(5).replace('-','/') }}</div>
+                </div>
+                <div v-else-if="isCellOn(selectedCourse.scheduleCells, d, p)" class="sched-cell off-term" :title="t('grid.noClassDay')">
                   <div class="sched-date">{{ weekCellDate(d).slice(5).replace('-','/') }}</div>
                 </div>
                 <div v-else class="sched-cell empty"></div>
@@ -1630,8 +1646,11 @@
   <!-- コンテキスト型チュートリアル：どの画面でも表示。クリック箇所はスポットライトで強調 -->
   <template v-if="showTutorial && tutorialQueue.length">
     <div v-if="!tutorialRect" class="tutorial-overlay" @click.self="closeTutorial()"></div>
-    <div v-else class="tut-spotlight" :style="spotlightStyle"></div>
-    <div class="tutorial-card" :class="'tut-pos-' + tutCardPos">
+    <template v-else>
+      <div class="tut-spotlight" :class="{ typing: tutTyping }" :style="spotlightStyle"></div>
+      <div v-for="(b,i) in spotBlockers" :key="i" v-show="!tutTyping" class="tut-blocker" :style="b"></div>
+    </template>
+    <div v-show="!(tutTyping && tutorialRect)" class="tutorial-card" :class="'tut-pos-' + tutCardPos">
       <template v-if="curTip.video">
         <video v-if="/\.(mp4|webm|ogg)(\?|$)/i.test(curTip.video)" :src="curTip.video" controls playsinline class="w-100 mb-1" style="border-radius:12px;max-height:200px;background:#000"></video>
         <div v-else class="ratio ratio-16x9 mb-1" style="border-radius:12px;overflow:hidden">
@@ -1737,6 +1756,7 @@ const I18N = {
     'grid.normal': '通常',
     'grid.withSuper': 'Super表示',
     'grid.lunch': '昼休み',
+    'grid.noClassDay': '学期の休み期間（授業なし・出席の対象外）',
     'grid.prevWeek': '← 前週',
     'grid.nextWeek': '次週 →',
     'grid.weekOf': (d) => `${d} の週`,
@@ -2224,6 +2244,7 @@ const I18N = {
     'grid.normal': 'Normal',
     'grid.withSuper': 'With Super',
     'grid.lunch': 'Lunch',
+    'grid.noClassDay': 'Term break (no class, not counted for attendance)',
     'grid.prevWeek': '← Prev week',
     'grid.nextWeek': 'Next week →',
     'grid.weekOf': (d) => `Week of ${d}`,
@@ -2693,6 +2714,7 @@ createApp({
       tutorialStep: 0,            // 表示中キュー内の位置
       tutorialQueue: [],          // 今表示している画面のヒント配列
       tutorialRect: null,         // ハイライト対象の位置（スポットライト演出用）
+      tutTyping: false,           // 文字入力中（キーボード表示中）はチュートリアルUIを一時退避
       tutLastCtx: 'home',         // 直前に処理したチュートリアルctx（二重発火防止）
       // 各ヒントは ctx（画面/段階）に来たとき表示。target があればその要素を光らせる。video は各自設定。
       tutorialSteps: [
@@ -2722,10 +2744,13 @@ createApp({
       newTeacherInput: '',
       newRoomInput: '',
 
+      // 学期＝出席がカウントされる期間。途中に休みが入るのでranges（複数区間）で持つ。
+      // 出席は月〜土の授業のみカウント（日曜は授業なし）。
+      // 送信側Edge Functionにも同じ内容を複製しているので、変えるときは両方を直すこと。
       termDefs: {
-        spring: { name: 'Spring Term', weeks: 14, start: '2026-04-07', end: '2026-07-15' },
-        autumn: { name: 'Autumn Term', weeks: 12, start: '2026-09-28', end: '2026-12-19' },
-        winter: { name: 'Winter Term', weeks: 10, start: '2027-01-10', end: '2027-03-13' },
+        spring: { name: 'Spring Term', weeks: 9,  ranges: [{ start: '2027-04-10', end: '2027-04-30' }, { start: '2027-05-06', end: '2027-06-16' }] },
+        autumn: { name: 'Autumn Term', weeks: 9,  ranges: [{ start: '2026-09-05', end: '2026-10-09' }, { start: '2026-10-14', end: '2026-11-10' }] },
+        winter: { name: 'Winter Term', weeks: 10, ranges: [{ start: '2026-12-04', end: '2026-12-22' }, { start: '2027-01-06', end: '2027-02-22' }] },
       },
 
       // 時限→時刻（出席確認通知の判定に使用）。送信側Edge Functionにも同じ内容を複製しているので、
@@ -2842,6 +2867,22 @@ createApp({
         width: (r.width + pad * 2) + 'px',
         height: (r.height + pad * 2) + 'px',
       };
+    },
+    // スポットライトの穴（対象要素＋pad）以外を覆う透明ブロッカー4枚（上・下・左・右）。
+    // 説明デモ中に背後の画面へ触れないようにする。穴の中＝光っている要素だけ操作できる。
+    spotBlockers() {
+      const r = this.tutorialRect; if (!r) return [];
+      const pad = 8;
+      const top = Math.max(0, r.top - pad);
+      const left = Math.max(0, r.left - pad);
+      const right = r.left + r.width + pad;
+      const bottom = r.top + r.height + pad;
+      return [
+        { top: '0', left: '0', right: '0', height: top + 'px' },
+        { top: bottom + 'px', left: '0', right: '0', bottom: '0' },
+        { top: top + 'px', left: '0', width: left + 'px', height: (bottom - top) + 'px' },
+        { top: top + 'px', left: right + 'px', right: '0', height: (bottom - top) + 'px' },
+      ];
     },
     // 説明カードの表示位置（ターゲット無し=中央／対象が下半分=上／それ以外=下）
     tutCardPos() {
@@ -3572,14 +3613,7 @@ createApp({
       this.editCriteria = false;
       this.editAttScale = false;
       this.seeAllGrades = false;
-      const td = this.termDefs[course.term];
-      let start = this.mondayOf(this.todayStr);
-      if (td) {
-        const firstMon = this.mondayOf(td.start);
-        if (start < firstMon) start = firstMon;
-        else if (start > td.end) start = this.mondayOf(td.end);
-      }
-      this.attWeekStart = start;
+      this.attWeekStart = this.initWeekFor(course.term);
       this.attSelectedDate = '';
       this.view = 'detail';
     },
@@ -4408,6 +4442,31 @@ createApp({
     fmtDate(d) {
       return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     },
+    // 学期全体の開始／終了（表示と週送りのクランプ用。途中の休みは含んだ外枠）
+    termStart(term) {
+      const td = this.termDefs[term];
+      return td ? td.ranges[0].start : '';
+    },
+    termEnd(term) {
+      const td = this.termDefs[term];
+      return td ? td.ranges[td.ranges.length - 1].end : '';
+    },
+    // その日に授業があるか（学期の区間内、かつ月〜土）。休み期間・日曜はfalse
+    inTerm(dateStr, term) {
+      const td = this.termDefs[term];
+      if (!td || !dateStr) return false;
+      if (new Date(dateStr + 'T00:00:00').getDay() === 0) return false;
+      return td.ranges.some(r => dateStr >= r.start && dateStr <= r.end);
+    },
+    // その週（月曜始まり）に授業日が1日でもあるか。休みだけの週を飛ばす判定に使う
+    weekHasClassDay(weekStart, term) {
+      for (let i = 0; i < 6; i++) {
+        const d = new Date(weekStart + 'T00:00:00');
+        d.setDate(d.getDate() + i);
+        if (this.inTerm(this.fmtDate(d), term)) return true;
+      }
+      return false;
+    },
     // scheduleCells（時限グリッド）優先、未設定の旧コースはmeetingDaysにフォールバック
     courseScheduleDays(course) {
       if (course.scheduleCells && course.scheduleCells.length) {
@@ -4420,9 +4479,11 @@ createApp({
       const td = this.termDefs[course.term];
       if (!days.length || !td) return [];
       const out = [];
-      const end = new Date(td.end + 'T00:00:00');
-      for (let d = new Date(td.start + 'T00:00:00'); d <= end; d.setDate(d.getDate() + 1)) {
-        if (days.includes(d.getDay())) out.push(this.fmtDate(d));
+      for (const rg of td.ranges) {
+        const end = new Date(rg.end + 'T00:00:00');
+        for (let d = new Date(rg.start + 'T00:00:00'); d <= end; d.setDate(d.getDate() + 1)) {
+          if (d.getDay() !== 0 && days.includes(d.getDay())) out.push(this.fmtDate(d));
+        }
       }
       return out;
     },
@@ -4469,16 +4530,37 @@ createApp({
       d.setDate(d.getDate() + (day === 0 ? 6 : day - 1));
       return this.fmtDate(d);
     },
-    // 週の月曜日(current)からdeltaDays分ずらす。termの開始/終了でクランプ（範囲外なら元の週のまま）
+    // 週の月曜日(current)からdeltaDays分ずらす。termの開始/終了でクランプ（範囲外なら元の週のまま）。
+    // 学期の途中の休みだけで授業が1日も無い週は飛ばして、次に授業がある週まで進める。
     shiftWeekClamped(current, term, deltaDays) {
       const td = this.termDefs[term];
       const d = new Date(current + 'T00:00:00');
       d.setDate(d.getDate() + deltaDays);
-      const next = this.fmtDate(d);
+      let next = this.fmtDate(d);
       if (!td) return next;
-      if (deltaDays < 0 && next < this.mondayOf(td.start)) return current;
-      if (deltaDays > 0 && next > td.end) return current;
-      return next;
+      const firstMon = this.mondayOf(this.termStart(term));
+      const lastMon = this.mondayOf(this.termEnd(term));
+      for (let i = 0; i < 60; i++) {
+        if (next < firstMon || next > lastMon) return current;
+        if (this.weekHasClassDay(next, term)) return next;
+        d.setDate(d.getDate() + (deltaDays < 0 ? -7 : 7));
+        next = this.fmtDate(d);
+      }
+      return current;
+    },
+    // 今日を含む週（学期範囲でクランプ）。休みだけの週なら授業がある週へ寄せる
+    initWeekFor(term) {
+      let start = this.mondayOf(this.todayStr);
+      if (!this.termDefs[term]) return start;
+      const firstMon = this.mondayOf(this.termStart(term));
+      const lastMon = this.mondayOf(this.termEnd(term));
+      if (start < firstMon) start = firstMon;
+      else if (start > lastMon) start = lastMon;
+      if (!this.weekHasClassDay(start, term)) {
+        const fwd = this.shiftWeekClamped(start, term, 7);
+        start = (fwd !== start) ? fwd : this.shiftWeekClamped(start, term, -7);
+      }
+      return start;
     },
     attPrevWeek() {
       this.attWeekStart = this.shiftWeekClamped(this.attWeekStart, this.selectedCourse.term, -7);
@@ -4490,14 +4572,7 @@ createApp({
     },
     // ── ホーム画面：全授業まとめ時間割 ──────────────
     initHomeWeek() {
-      const td = this.termDefs[this.currentTerm];
-      let start = this.mondayOf(this.todayStr);
-      if (td) {
-        const firstMon = this.mondayOf(td.start);
-        if (start < firstMon) start = firstMon;
-        else if (start > td.end) start = this.mondayOf(td.end);
-      }
-      this.homeWeekStart = start;
+      this.homeWeekStart = this.initWeekFor(this.currentTerm);
       this.homeAttCourseId = '';
       this.homeAttDate = '';
     },
@@ -4790,6 +4865,7 @@ createApp({
       if (!q.length) return;
       this.tutorialQueue = q;
       this.tutorialStep = 0;
+      this.tutTyping = false;
       this.showTutorial = true;
       this.positionTutorial();
     },
@@ -4838,6 +4914,8 @@ createApp({
       (this.tutorialQueue || []).forEach(s => { this.tutorialSeen[s.key] = true; });
       this.showTutorial = false;
       this.tutorialRect = null;
+      clearTimeout(this._tutTypingTimer);
+      this.tutTyping = false;
       this.saveData();
     },
     // すべてのヒントを今後表示しない（アカウント単位・全端末）
@@ -4845,6 +4923,8 @@ createApp({
       this.tutorialDismissed = true;
       this.showTutorial = false;
       this.tutorialRect = null;
+      clearTimeout(this._tutTypingTimer);
+      this.tutTyping = false;
       try { localStorage.setItem('gpa_tutorial_dismissed', '1'); } catch (e) {}
       this.saveData();   // アカウント(app_state)にも保存 → 全端末で非表示
     },
@@ -5118,6 +5198,24 @@ createApp({
     const repos = () => this.repositionTutorial();
     window.addEventListener('resize', repos);
     window.addEventListener('scroll', repos, true);
+    // 文字入力中はチュートリアルUI（カード・暗幕・ブロッカー）を一時退避。
+    // スマホではキーボードで画面が狭くなり、カード＋暗幕が重なるとほぼ何も見えなくなるため。
+    // 復帰はフォーカスが外れて少し待ってから（検索結果タップ等のクリックを潰さないための遅延）。
+    const typingEl = el => el && (el.tagName === 'TEXTAREA' ||
+      (el.tagName === 'INPUT' && !/^(checkbox|radio|button|submit|reset|file|range|color)$/i.test(el.type || 'text')));
+    document.addEventListener('focusin', e => {
+      if (!this.showTutorial || !typingEl(e.target)) return;
+      clearTimeout(this._tutTypingTimer);
+      this.tutTyping = true;
+    });
+    document.addEventListener('focusout', e => {
+      if (!typingEl(e.target)) return;
+      clearTimeout(this._tutTypingTimer);
+      this._tutTypingTimer = setTimeout(() => {
+        this.tutTyping = false;
+        this.repositionTutorial();
+      }, 300);
+    });
   },
 
   watch: {
