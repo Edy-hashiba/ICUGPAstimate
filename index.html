@@ -484,6 +484,13 @@
               <template v-else>{{ t('home.needAvgOf', nextGradeTarget(c).required.toFixed(0)) }}</template>
             </strong>
           </div>
+          <!-- 最低出席：あと何回休めるか／すでに対象外か -->
+          <div v-if="absencesLeft(c) !== null" class="mt-1" style="font-size:.78rem">
+            <span v-if="isAttendanceFailed(c)" class="badge bg-danger">{{ t('home.attFailed') }}</span>
+            <span v-else class="badge" :class="attLeftClass(c)">
+              {{ t('home.absencesLeft', absencesLeft(c)) }}
+            </span>
+          </div>
         </div>
         <!-- Grade display -->
         <div class="text-end" style="min-width:60px">
@@ -1005,6 +1012,114 @@
       <div v-if="courseForm.gradingCriteria.length>0 && !criteriaTotalOk" class="alert alert-warning small py-1 mt-2 mb-0">
         {{ t('cf.criteriaTotalWarning', criteriaTotal.toFixed(0)) }}
       </div>
+
+      <!-- どの項目が出席に関わるか（シラバス読み取りの推測を確認・修正する） -->
+      <div v-if="courseForm.gradingCriteria.length>0" class="mt-3 pt-2" style="border-top:1px solid #f1f3f9">
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <div class="section-label mb-0">{{ t('cf.attCritTitle') }}</div>
+          <span v-if="attCritNeedsConfirm" class="badge bg-warning text-dark">{{ t('cf.attCritConfirm') }}</span>
+        </div>
+        <div class="form-text mb-2">{{ t('cf.attCritDesc') }}</div>
+        <div v-for="cr in courseForm.gradingCriteria" :key="'ac-'+cr.id" class="form-check">
+          <input class="form-check-input" type="checkbox" :id="'ac-'+cr.id"
+                 :checked="isAttCriterion(cr.id)" @change="toggleAttCriterion(cr)">
+          <label class="form-check-label" :for="'ac-'+cr.id">
+            {{ t('cf.critWithPct', cr.name || t('cf.unnamedCriterion'), cr.percentage) }}
+          </label>
+        </div>
+        <div class="form-text mt-1">
+          {{ attCritSummary }}
+        </div>
+      </div>
+    </div>
+
+    <!-- 出席のポリシー（欠席・遅刻による減点） -->
+    <div class="card p-3 mb-3" style="border-radius:14px">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="section-label mb-0">{{ t('cf.attPolicyTitle') }}</div>
+        <button v-if="!courseForm.attendanceDeduct" class="btn btn-sm btn-outline-primary" @click="addFormDeduct()">＋</button>
+        <button v-else class="btn btn-sm btn-outline-danger" @click="courseForm.attendanceDeduct=null">{{ t('cf.attPolicyRemove') }}</button>
+      </div>
+      <div v-if="!courseForm.attendanceDeduct" class="text-muted small">{{ t('cf.attPolicyNone') }}</div>
+      <div v-else>
+        <!-- 減点の対象 -->
+        <label class="form-label small mb-1">{{ t('cf.attPolicyTarget') }}</label>
+        <select v-model="courseForm.attendanceDeduct.target" class="form-select form-select-sm mb-2">
+          <option value="overall">{{ t('cf.attTargetOverall') }}</option>
+          <option v-for="cr in courseForm.gradingCriteria" :key="cr.id" :value="cr.id">
+            {{ t('cf.critWithPct', cr.name || t('cf.unnamedCriterion'), cr.percentage) }}
+          </option>
+        </select>
+
+        <!-- 欠席 -->
+        <label class="form-label small mb-1">{{ t('cf.attPolicyAbsence') }}</label>
+        <div class="input-group input-group-sm mb-2" style="max-width:220px">
+          <input type="number" step="0.5" min="0" v-model.number="courseForm.attendanceDeduct.perAbsence" class="form-control">
+          <span class="input-group-text">{{ t('cf.attPolicyPerAbsenceUnit') }}</span>
+        </div>
+
+        <!-- 遅刻 -->
+        <label class="form-label small mb-1">{{ t('cf.attPolicyLate') }}</label>
+        <select v-model="courseForm.attendanceDeduct.lateMode" class="form-select form-select-sm mb-2">
+          <option value="none">{{ t('cf.attLateNone') }}</option>
+          <option value="points">{{ t('cf.attLatePoints') }}</option>
+          <option value="convert">{{ t('cf.attLateConvert') }}</option>
+        </select>
+        <div v-if="courseForm.attendanceDeduct.lateMode==='points'" class="input-group input-group-sm mb-2" style="max-width:220px">
+          <input type="number" step="0.5" min="0" v-model.number="courseForm.attendanceDeduct.perLate" class="form-control">
+          <span class="input-group-text">{{ t('cf.attPolicyPerLateUnit') }}</span>
+        </div>
+        <div v-if="courseForm.attendanceDeduct.lateMode==='convert'" class="input-group input-group-sm mb-2" style="max-width:260px">
+          <span class="input-group-text">{{ t('cf.attLateConvertPre') }}</span>
+          <input type="number" step="1" min="1" v-model.number="courseForm.attendanceDeduct.lateToAbsence" class="form-control">
+          <span class="input-group-text">{{ t('cf.attLateConvertPost') }}</span>
+        </div>
+
+        <div class="small text-muted">{{ formDeductSummary }}</div>
+        <div v-if="formDeductWarning" class="alert alert-warning small py-1 px-2 mt-2 mb-0">{{ formDeductWarning }}</div>
+      </div>
+
+      <!-- 最低出席（下回ると評価対象外） -->
+      <hr class="my-3">
+      <div class="form-check">
+        <input class="form-check-input" type="checkbox" id="attMinCheck"
+               :checked="!!courseForm.attendanceMin" @change="toggleAttMin($event.target.checked)">
+        <label class="form-check-label" for="attMinCheck">{{ t('cf.attMinCheck') }}</label>
+      </div>
+      <div class="form-text mb-2">{{ t('cf.attMinDesc') }}</div>
+
+      <div v-if="courseForm.attendanceMin">
+        <label class="form-label small mb-1">{{ t('cf.attMinMeaning') }}</label>
+        <select v-model="courseForm.attendanceMin.meaning" class="form-select form-select-sm mb-2">
+          <option value="required">{{ t('cf.attMinRequired') }}</option>
+          <option value="excluded">{{ t('cf.attMinExcluded') }}</option>
+        </select>
+
+        <label class="form-label small mb-1">{{ t('cf.attMinHow') }}</label>
+        <select v-model="courseForm.attendanceMin.mode" class="form-select form-select-sm mb-2">
+          <option value="percent">{{ t('cf.attMinModePercent') }}</option>
+          <option value="fraction">{{ t('cf.attMinModeFraction') }}</option>
+          <option value="count">{{ t('cf.attMinModeCount') }}</option>
+        </select>
+
+        <div v-if="courseForm.attendanceMin.mode==='percent'" class="input-group input-group-sm mb-2" style="max-width:160px">
+          <input type="number" step="1" min="0" max="100" v-model.number="courseForm.attendanceMin.percent" class="form-control">
+          <span class="input-group-text">%</span>
+        </div>
+        <div v-else-if="courseForm.attendanceMin.mode==='fraction'" class="d-flex align-items-center gap-2 mb-2" style="max-width:220px">
+          <input type="number" step="1" min="1" v-model.number="courseForm.attendanceMin.den" class="form-control form-control-sm">
+          <span class="small text-muted">{{ t('cf.attMinFractionOf') }}</span>
+          <input type="number" step="1" min="0" v-model.number="courseForm.attendanceMin.num" class="form-control form-control-sm">
+        </div>
+        <div v-else class="input-group input-group-sm mb-2" style="max-width:160px">
+          <input type="number" step="1" min="0" v-model.number="courseForm.attendanceMin.count" class="form-control">
+          <span class="input-group-text">{{ t('cf.attMinTimes') }}</span>
+        </div>
+
+        <div class="alert py-2 px-2 mb-0 small" :class="formAttMinInfo.ok ? 'alert-info' : 'alert-warning'">
+          {{ formAttMinInfo.text }}
+        </div>
+      </div>
     </div>
 
     <!-- Pre-registered Assignments -->
@@ -1086,6 +1201,12 @@
     <!-- Grade Prediction -->
     <div class="card p-3 mb-3" style="border-radius:14px">
       <div class="section-label">{{ t('cd.gradePrediction') }}</div>
+      <div v-if="isAttendanceFailed(selectedCourse)" class="alert alert-danger py-2 px-3 small mb-2">
+        {{ t('cd.attFailedNote', maxAllowedAbsences(selectedCourse), countedAbsences(selectedCourse)) }}
+      </div>
+      <div v-else-if="absencesLeft(selectedCourse) !== null" class="alert alert-secondary py-2 px-3 small mb-2">
+        {{ t('cd.attLeftNote', absencesLeft(selectedCourse), maxAllowedAbsences(selectedCourse)) }}
+      </div>
       <div v-if="selectedCourse.roundGrade" class="text-muted mb-2" style="font-size:.74rem">{{ t('cd.roundNote') }}</div>
 
       <!-- 確定成績（入力済みなら最優先で表示） -->
@@ -1538,6 +1659,13 @@
           </button>
           <div v-else class="border rounded p-2" style="background:#fff7ed">
             <div class="section-label mb-1">{{ t('cd.deductTitle') }}</div>
+            <label class="form-label small mb-0">{{ t('cf.attPolicyTarget') }}</label>
+            <select v-model="selectedCourse.attendanceDeduct.target" class="form-select form-select-sm mb-2" @change="saveData()">
+              <option value="overall">{{ t('cf.attTargetOverall') }}</option>
+              <option v-for="cr in selectedCourse.gradingCriteria" :key="cr.id" :value="cr.id">
+                {{ t('cf.critWithPct', cr.name || t('cf.unnamedCriterion'), cr.percentage) }}
+              </option>
+            </select>
             <div class="row g-2">
               <div class="col-6">
                 <label class="form-label small mb-0">{{ t('cd.perAbsenceLabel') }}</label>
@@ -1547,14 +1675,29 @@
                 </div>
               </div>
               <div class="col-6">
+                <label class="form-label small mb-0">{{ t('cf.attPolicyLate') }}</label>
+                <select v-model="selectedCourse.attendanceDeduct.lateMode" class="form-select form-select-sm" @change="saveData()">
+                  <option value="none">{{ t('cf.attLateNone') }}</option>
+                  <option value="points">{{ t('cf.attLatePoints') }}</option>
+                  <option value="convert">{{ t('cf.attLateConvert') }}</option>
+                </select>
+              </div>
+              <div v-if="selectedCourse.attendanceDeduct.lateMode==='points'" class="col-6">
                 <label class="form-label small mb-0">{{ t('cd.perLateLabel') }}</label>
                 <div class="input-group input-group-sm">
                   <input type="number" step="0.5" min="0" v-model.number="selectedCourse.attendanceDeduct.perLate" class="form-control">
                   <span class="input-group-text">{{ t('cf.points') }}</span>
                 </div>
               </div>
+              <div v-if="selectedCourse.attendanceDeduct.lateMode==='convert'" class="col-6">
+                <label class="form-label small mb-0">{{ t('cf.attLateConvertLabel') }}</label>
+                <div class="input-group input-group-sm">
+                  <span class="input-group-text">{{ t('cf.attLateConvertPre') }}</span>
+                  <input type="number" step="1" min="1" v-model.number="selectedCourse.attendanceDeduct.lateToAbsence" class="form-control">
+                </div>
+              </div>
             </div>
-            <div class="small mt-2">{{ t('cd.currentDeduct', attendanceDeductPoints(selectedCourse), selectedCourse.absences, selectedCourse.lates) }}</div>
+            <div class="small mt-2">{{ t('cd.currentDeduct2', attendanceDeductPoints(selectedCourse), deductTargetName(selectedCourse), selectedCourse.absences, selectedCourse.lates) }}</div>
             <button class="btn btn-sm btn-outline-danger mt-2" @click="selectedCourse.attendanceDeduct=null; saveData()">{{ t('cd.stopDeduct') }}</button>
           </div>
         </div>
@@ -1849,6 +1992,8 @@ const I18N = {
     'home.unreachable': '到達不可',
     'home.needAvgOf': (pct) => `残りで平均 ${pct}% 以上`,
     'home.confirmed': '✅ 確定',
+    'home.absencesLeft': (n) => `あと${n}回欠席でFAIL`,
+    'home.attFailed': '⚠ 出席不足でFAIL',
     'home.noData': 'データなし',
     'home.addGradeShort': '📝 成績追加',
     'home.attendanceShort': '📅 出席',
@@ -1887,6 +2032,48 @@ const I18N = {
     'cf.roomPerCell': 'コマごとの教室（教室が複数あるため割り当ててください）',
     'cf.roomUnset': '― 未設定 ―',
     'cf.attendanceMatters': '出席が評価に影響する',
+    'cf.attPolicyTitle': '⛔ 欠席・遅刻による減点',
+    'cf.attPolicyNone': '欠席や遅刻で点が引かれる場合は「＋」から設定します（例: 欠席1回につき出席点から2点）。',
+    'cf.attPolicyRemove': '設定を削除',
+    'cf.attPolicyTarget': 'どこから引かれるか',
+    'cf.attTargetOverall': '全体（最終成績）',
+    'cf.attTargetMissing': '（削除された成績基準）',
+    'cf.unnamedCriterion': '名前のない成績基準',
+    'cf.critWithPct': (name, pct) => `${name}（${pct}%）`,
+    'cf.attCritTitle': '出席に関わる項目',
+    'cf.attCritConfirm': '⚠ 確認してください',
+    'cf.attCritDesc': 'シラバスの項目名から自動で判定しています。チェックした項目は課題として点数を入力せず、出席の記録から自動計算します。「Participation」と書かれていても実際は別の項目が出席の対象という授業もあるので、違っていればここで直してください。',
+    'cf.attCritNone': '出席に関わる項目はありません（すべて課題として点数を入力します）。',
+    'cf.attCritChosen': (names) => `「${names}」を出席から自動計算します。課題の一覧からは外れます。`,
+    'cf.attMinCheck': 'この授業は最低出席数（率）が決まっている',
+    'cf.attMinDesc': '「3分の2以上の出席が必要」「5回欠席で不可」など、下回ると単位が取れなくなる基準がある場合にチェックします。',
+    'cf.attMinMeaning': '基準の意味',
+    'cf.attMinRequired': 'これ以上「出席」すれば評価対象',
+    'cf.attMinExcluded': 'これ以上「欠席」すると評価対象外',
+    'cf.attMinHow': '書き方',
+    'cf.attMinModePercent': 'パーセントで指定',
+    'cf.attMinModeFraction': '分数で指定',
+    'cf.attMinModeCount': '回数で指定',
+    'cf.attMinFractionOf': '分の',
+    'cf.attMinTimes': '回',
+    'cf.attMinNeedTotal': '総授業回数が決まると、何回まで休めるかを計算します（時間割か総授業回数を入力してください）。',
+    'cf.attMinTooLoose': (total) => `この設定では全${total}回すべて休んでも対象外になりません。基準を確認してください。`,
+    'cf.attMinResult': (total, max, fail) => `全${total}回のうち ${max}回まで欠席できます（${fail}回目の欠席で評価対象外）。`,
+    'cf.attPolicyAbsence': '欠席1回につき',
+    'cf.attPolicyPerAbsenceUnit': '点（％）引く',
+    'cf.attPolicyLate': '遅刻の扱い',
+    'cf.attLateNone': '遅刻は減点しない',
+    'cf.attLatePoints': '遅刻1回ごとに減点する',
+    'cf.attLateConvert': '遅刻が一定回数で欠席1回として扱う',
+    'cf.attPolicyPerLateUnit': '点（％）引く',
+    'cf.attLateConvertPre': '遅刻',
+    'cf.attLateConvertPost': '回で欠席1回',
+    'cf.attLateConvertLabel': '何回で欠席1回か',
+    'cf.attSummaryAbsence': (target, pts) => `欠席1回につき「${target}」から ${pts} 点（％）引かれます。`,
+    'cf.attSummaryLatePoints': (pts) => ` 遅刻1回につき さらに ${pts} 点（％）引かれます。`,
+    'cf.attSummaryLateConvert': (n) => ` 遅刻 ${n} 回ごとに欠席1回として扱われます。`,
+    'cf.attWarnNoTarget': '対象にしていた成績基準が見つかりません。対象を選び直してください。',
+    'cf.attWarnTooBig': (name, pct) => `1回の減点が「${name}」の配点（${pct}%）を超えています。1回の欠席で0%になります。`,
     'cf.needsCheck': '⚠ 要確認:',
     'cf.aiDetected': '🤖 シラバスから自動判定:',
     'cf.checkAttendanceIncluded': '（出席を含むかチェックを確認してください）',
@@ -1937,6 +2124,8 @@ const I18N = {
     'cd.sessionsCount': (n) => `${n}コマ`,
     'cd.gradePrediction': '📊 成績予想',
     'cd.roundNote': '※ 合計点を四捨五入して成績判定（シラバス指示）',
+    'cd.attFailedNote': (max, now) => `出席不足のため評価対象外です（欠席できるのは${max}回まで／現在${now}回）。点数に関わらず最低評価になります。`,
+    'cd.attLeftNote': (left, max) => `あと${left}回まで欠席できます（上限${max}回）。超えると点数に関わらず評価対象外になります。`,
     'cd.confirmedGrade': '✅ 確定成績',
     'cd.confirmedNote': '成績発表済み。GPAはこの確定成績で計算されます（下は参考の予想）。',
     'cd.clearConfirmed': '確定成績を取り消す',
@@ -2038,6 +2227,7 @@ const I18N = {
     'cd.perAbsenceLabel': '欠席1回 −',
     'cd.perLateLabel': '遅刻1回 −',
     'cd.currentDeduct': (pts, abs, late) => `現在の減点: −${pts}点（欠席${abs}・遅刻${late}）→ 予想%から差し引き`,
+    'cd.currentDeduct2': (pts, target, abs, late) => `現在の減点: 「${target}」から −${pts}点（欠席${abs}・遅刻${late}）`,
     'cd.stopDeduct': '減点をやめる',
     'ag.title': '成績を追加',
     'ag.pickAssignment': '課題を選んでください',
@@ -2355,6 +2545,8 @@ const I18N = {
     'home.unreachable': 'Not reachable',
     'home.needAvgOf': (pct) => `Need ${pct}%+ avg on the rest`,
     'home.confirmed': '✅ Confirmed',
+    'home.absencesLeft': (n) => `${n} more absence(s) = FAIL`,
+    'home.attFailed': '⚠ FAIL (attendance)',
     'home.noData': 'No data',
     'home.addGradeShort': '📝 Add Grade',
     'home.attendanceShort': '📅 Attendance',
@@ -2393,6 +2585,48 @@ const I18N = {
     'cf.roomPerCell': 'Room per session (multiple rooms registered — please assign)',
     'cf.roomUnset': '— Not set —',
     'cf.attendanceMatters': 'Attendance affects the grade',
+    'cf.attPolicyTitle': '⛔ Deductions for absence / lateness',
+    'cf.attPolicyNone': 'If absences or lates cost you points, set it up with "+" (e.g. 2 points off participation per absence).',
+    'cf.attPolicyRemove': 'Remove',
+    'cf.attPolicyTarget': 'Deducted from',
+    'cf.attTargetOverall': 'Overall (final grade)',
+    'cf.attTargetMissing': '(deleted criterion)',
+    'cf.unnamedCriterion': 'unnamed criterion',
+    'cf.critWithPct': (name, pct) => `${name} (${pct}%)`,
+    'cf.attCritTitle': 'Criteria tied to attendance',
+    'cf.attCritConfirm': '⚠ Please check',
+    'cf.attCritDesc': 'These were guessed from the criterion names. Ticked criteria are calculated from your attendance record instead of graded assignments. Some courses list "Participation" but tie attendance to a different criterion — correct it here if the guess is wrong.',
+    'cf.attCritNone': 'No criteria are tied to attendance (all of them are scored as assignments).',
+    'cf.attCritChosen': (names) => `"${names}" will be calculated from attendance and removed from the assignment list.`,
+    'cf.attMinCheck': 'This course has a minimum attendance requirement',
+    'cf.attMinDesc': 'Tick this if there is a threshold you cannot fall below, e.g. "must attend at least 2/3" or "5 absences means no credit".',
+    'cf.attMinMeaning': 'What the number means',
+    'cf.attMinRequired': 'Attend at least this much to be graded',
+    'cf.attMinExcluded': 'This many absences means no credit',
+    'cf.attMinHow': 'How it is written',
+    'cf.attMinModePercent': 'As a percentage',
+    'cf.attMinModeFraction': 'As a fraction',
+    'cf.attMinModeCount': 'As a number of sessions',
+    'cf.attMinFractionOf': 'out of, take',
+    'cf.attMinTimes': 'times',
+    'cf.attMinNeedTotal': 'Once the total number of sessions is known, this will show how many you can miss (set a timetable or a total).',
+    'cf.attMinTooLoose': (total) => `With this setting you could miss all ${total} sessions and still be graded. Please double-check it.`,
+    'cf.attMinResult': (total, max, fail) => `You can miss ${max} of ${total} sessions (absence number ${fail} means no credit).`,
+    'cf.attPolicyAbsence': 'Per absence',
+    'cf.attPolicyPerAbsenceUnit': 'pts (%) off',
+    'cf.attPolicyLate': 'How lateness counts',
+    'cf.attLateNone': 'Lateness costs nothing',
+    'cf.attLatePoints': 'Deduct points per late',
+    'cf.attLateConvert': 'N lates count as one absence',
+    'cf.attPolicyPerLateUnit': 'pts (%) off',
+    'cf.attLateConvertPre': 'Every',
+    'cf.attLateConvertPost': 'lates = 1 absence',
+    'cf.attLateConvertLabel': 'Lates per absence',
+    'cf.attSummaryAbsence': (target, pts) => `Each absence takes ${pts} pts (%) off "${target}".`,
+    'cf.attSummaryLatePoints': (pts) => ` Each late takes a further ${pts} pts (%) off.`,
+    'cf.attSummaryLateConvert': (n) => ` Every ${n} lates count as one absence.`,
+    'cf.attWarnNoTarget': "The criterion this was pointing at no longer exists. Pick a new target.",
+    'cf.attWarnTooBig': (name, pct) => `One deduction is larger than the whole weight of "${name}" (${pct}%). A single absence would take it to 0%.`,
     'cf.needsCheck': '⚠ Please check:',
     'cf.aiDetected': '🤖 Auto-detected from syllabus:',
     'cf.checkAttendanceIncluded': ' (please confirm whether attendance is included)',
@@ -2443,6 +2677,8 @@ const I18N = {
     'cd.sessionsCount': (n) => `${n}`,
     'cd.gradePrediction': '📊 Grade Prediction',
     'cd.roundNote': '※ Total score is rounded before grading (per syllabus)',
+    'cd.attFailedNote': (max, now) => `No credit due to attendance (limit is ${max} absences; you have ${now}). The grade is forced to the lowest regardless of your score.`,
+    'cd.attLeftNote': (left, max) => `You can still miss ${left} session(s) (limit ${max}). Going over means no credit regardless of your score.`,
     'cd.confirmedGrade': '✅ Confirmed Grade',
     'cd.confirmedNote': 'Grade has been released. GPA is calculated from this confirmed grade (predictions below are for reference).',
     'cd.clearConfirmed': 'Clear confirmed grade',
@@ -2544,6 +2780,7 @@ const I18N = {
     'cd.perAbsenceLabel': 'Per absence −',
     'cd.perLateLabel': 'Per late −',
     'cd.currentDeduct': (pts, abs, late) => `Current deduction: −${pts} pts (${abs} absences, ${late} lates) → subtracted from the predicted %`,
+    'cd.currentDeduct2': (pts, target, abs, late) => `Current deduction: −${pts} pts from "${target}" (${abs} absences, ${late} lates)`,
     'cd.stopDeduct': 'Stop deductions',
     'ag.title': 'Add Grade',
     'ag.pickAssignment': 'Pick an assignment',
@@ -2822,6 +3059,7 @@ createApp({
       syllabusInput: 'text',
       syllabusBusy: false,
       syllabusStatus: '',
+      attCritNeedsConfirm: false,   // シラバス読み取り直後、出席に関わる項目の確認を促す
       // AIシラバス読み取り（Gemini）。キーはこの端末のlocalStorageのみに保存（クラウド非同期）
       geminiKey: '',
       geminiModel: 'gemini-2.0-flash',
@@ -2931,9 +3169,18 @@ createApp({
   },
 
   computed: {
-    // 時間割グリッドに表示する時限（Super4/Super5の表示切替を反映）
+    // 時間割グリッドに表示する時限（Super4/Super5の表示切替を反映）。
+    // 実際にSuper時限を使う授業があるときは、切替がOFFでも隠さない（授業が見えなくなるのを防ぐ）
     visiblePeriodLabels() {
-      return this.gridShowSuper ? this.periodLabels : this.periodLabels.filter(p => !p.startsWith('Super'));
+      if (this.gridShowSuper || this.anySuperInUse) return this.periodLabels;
+      return this.periodLabels.filter(p => !p.startsWith('Super'));
+    },
+    // 登録済み・編集中・表示中の授業がSuper時限を使っているか
+    anySuperInUse() {
+      const has = cells => (cells || []).some(c => String(c.period || '').startsWith('Super'));
+      if (this.courseForm && has(this.courseForm.scheduleCells)) return true;
+      if (this.selectedCourse && has(this.selectedCourse.scheduleCells)) return true;
+      return (this.currentTermCourses || []).some(c => has(c.scheduleCells));
     },
     weekdayLabels() {
       return this.lang === 'ja' ? ['日','月','火','水','木','金','土'] : ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -3144,6 +3391,50 @@ createApp({
         && this.gradeForm.maxScore > 0;
     },
 
+    // 授業登録フォームの出席ポリシーを日本語（英語）の説明文にする
+    formDeductSummary() {
+      const d = this.courseForm && this.courseForm.attendanceDeduct;
+      if (!d) return '';
+      const cr = (this.courseForm.gradingCriteria || []).find(c => c.id === d.target);
+      const target = (!d.target || d.target === 'overall')
+        ? this.t('cf.attTargetOverall')
+        : (cr ? (cr.name || this.t('cf.unnamedCriterion')) : this.t('cf.attTargetMissing'));
+      let s = this.t('cf.attSummaryAbsence', target, d.perAbsence || 0);
+      if (d.lateMode === 'points') s += this.t('cf.attSummaryLatePoints', d.perLate || 0);
+      else if (d.lateMode === 'convert') s += this.t('cf.attSummaryLateConvert', d.lateToAbsence || 0);
+      return s;
+    },
+    // 入力ミスになりやすいところを警告（対象が消えた／減点が対象の配点を超えている）
+    formDeductWarning() {
+      const d = this.courseForm && this.courseForm.attendanceDeduct;
+      if (!d || !d.target || d.target === 'overall') return '';
+      const cr = (this.courseForm.gradingCriteria || []).find(c => c.id === d.target);
+      if (!cr) return this.t('cf.attWarnNoTarget');
+      const pct = +cr.percentage || 0;
+      if (pct > 0 && (+d.perAbsence || 0) > pct) return this.t('cf.attWarnTooBig', cr.name || this.t('cf.unnamedCriterion'), pct);
+      return '';
+    },
+    // 「出席に関わる項目」の選択状況を文章にする
+    attCritSummary() {
+      const f = this.courseForm;
+      if (!f) return '';
+      const ids = f.attendanceCriterionIds || [];
+      if (!ids.length) return this.t('cf.attCritNone');
+      const names = (f.gradingCriteria || []).filter(c => ids.indexOf(c.id) !== -1)
+        .map(c => c.name || this.t('cf.unnamedCriterion'));
+      return this.t('cf.attCritChosen', names.join('、'));
+    },
+    // 入力した最低出席から「総授業回数のうち何回まで休めるか」を出して見せる
+    formAttMinInfo() {
+      const f = this.courseForm;
+      if (!f || !f.attendanceMin) return { ok: true, text: '' };
+      const total = this.totalClasses(f) - (f.cancelledClasses || 0);
+      if (!(total > 0)) return { ok: false, text: this.t('cf.attMinNeedTotal') };
+      const max = this.maxAllowedAbsences(f);
+      if (max === null) return { ok: false, text: this.t('cf.attMinNeedTotal') };
+      if (max >= total) return { ok: false, text: this.t('cf.attMinTooLoose', total) };
+      return { ok: true, text: this.t('cf.attMinResult', total, max, max + 1) };
+    },
     gradeContribution() {
       if (!this.gradePreviewOk) return 0;
       const cr = this.criterionById(this.selectedCourse, this.gradeForm.criterionId);
@@ -3167,6 +3458,22 @@ createApp({
           if (cr && cr.percentage > 0 && pts !== null) return Math.max(0, Math.min(1, pts / cr.percentage));
         }
       }
+      const base = this.gradeBasedRate(course, cId);
+      // この成績基準を対象にした出席減点があれば、その分を差し引く。
+      // まだ課題の点数が無い場合は「満点から引かれていく」と考えて100%を起点にする
+      const d = course.attendanceDeduct;
+      if (d && d.target && d.target !== 'overall' && d.target === cId) {
+        const cr = this.criterionById(course, cId);
+        const pct = cr ? (+cr.percentage || 0) : 0;
+        if (pct > 0) {
+          const lost = this.attendanceDeductPoints(course) / pct;
+          return Math.max(0, Math.min(1, (base === null ? 1 : base) - lost));
+        }
+      }
+      return base;
+    },
+    // 登録済みの課題の点数から、その成績基準の達成率を出す（出席減点は含まない）
+    gradeBasedRate(course, cId) {
       const gs = course.grades.filter(g => g.criterionId === cId);
       if (!gs.length) return null;
       // 内訳課題に重み(weight)がある場合のみ重み付き平均（シラバスの内訳%を反映）
@@ -3233,8 +3540,14 @@ createApp({
       return last.points;
     },
     scaleSorted(steps) { return steps.slice().sort((a, b) => a.absences - b.absences); },
+    // 出席の対象にする成績基準。登録時に確認済みならそれを優先し、無ければ名前から推測
+    attCriterionOf(course, re) {
+      const ids = course.attendanceCriterionIds || [];
+      const confirmed = ids.length ? course.gradingCriteria.find(c => c.id === ids[0]) : null;
+      return confirmed || course.gradingCriteria.find(c => re.test(c.name)) || course.gradingCriteria[0];
+    },
     enableAttScale(course) {
-      const attCr = course.gradingCriteria.find(c => /attendance|attention|出席|出欠|平常/i.test(c.name)) || course.gradingCriteria[0];
+      const attCr = this.attCriterionOf(course, /attendance|attention|出席|出欠|平常/i);
       if (!attCr) { this.toast_(this.t('js.addCriteriaFirst'), 'warning'); return; }
       const w = attCr.percentage || 10;
       course.attendanceScale = {
@@ -3249,7 +3562,7 @@ createApp({
 
     // 1コマ単位の参加点モードを手動で有効化
     enablePerSessionScale(course) {
-      const attCr = course.gradingCriteria.find(c => /attendance|attention|participation|出席|出欠|平常|参加/i.test(c.name)) || course.gradingCriteria[0];
+      const attCr = this.attCriterionOf(course, /attendance|attention|participation|出席|出欠|平常|参加/i);
       if (!attCr) { this.toast_(this.t('js.addCriteriaFirst'), 'warning'); return; }
       course.attendanceScale = { criterionId: attCr.id, mode: 'perSession', pointsPresent: 2, pointsLate: 1, pointsAbsent: 0 };
       course.attendanceMatters = true;
@@ -3281,14 +3594,159 @@ createApp({
     },
 
     // 出席による最終成績の減点（欠席/遅刻 × 1回あたり点）
+    // 旧形式 {perAbsence, perLate} を、対象(target)と遅刻の扱い(lateMode)を持つ新形式へ揃える
+    normalizeDeduct(d) {
+      if (!d) return null;
+      const perAbsence = +d.perAbsence || 0;
+      const perLate = +d.perLate || 0;
+      const l2a = +d.lateToAbsence || 0;
+      const lateMode = d.lateMode || (l2a > 0 ? 'convert' : (perLate > 0 ? 'points' : 'none'));
+      return {
+        target: d.target || 'overall',   // 'overall' か 成績基準のid
+        perAbsence,
+        lateMode,                        // 'none' | 'points' | 'convert'
+        perLate,
+        lateToAbsence: l2a || 3,
+      };
+    },
+    // 遅刻を欠席に換算した後の欠席回数
+    deductAbsences(course) {
+      const d = course && course.attendanceDeduct;
+      const lates = course.lates || 0;
+      const conv = (d && d.lateMode === 'convert' && d.lateToAbsence > 0) ? Math.floor(lates / d.lateToAbsence) : 0;
+      return (course.absences || 0) + conv;
+    },
+    // 欠席・遅刻による減点の合計（対象が全体か成績基準かに関わらず、生の点数）
     attendanceDeductPoints(course) {
       const d = course && course.attendanceDeduct;
       if (!d) return 0;
-      const pts = (course.absences || 0) * (+d.perAbsence || 0) + (course.lates || 0) * (+d.perLate || 0);
+      const latePts = (d.lateMode === 'points') ? (course.lates || 0) * (+d.perLate || 0) : 0;
+      const pts = this.deductAbsences(course) * (+d.perAbsence || 0) + latePts;
       return Math.max(0, Math.round(pts * 100) / 100);
     },
+    // 最終成績から直接引く分だけ。成績基準が対象のときは criterionRate 側で処理するので0
+    overallDeductPoints(course) {
+      const d = course && course.attendanceDeduct;
+      if (!d || (d.target && d.target !== 'overall')) return 0;
+      return this.attendanceDeductPoints(course);
+    },
+    // 減点の対象名（表示用）
+    deductTargetName(course) {
+      const d = course && course.attendanceDeduct;
+      if (!d || !d.target || d.target === 'overall') return this.t('cf.attTargetOverall');
+      return this.criterionName(course, d.target);
+    },
+    // ── 出席に関わる成績基準（シラバス読み取りの推測を利用者が確認・修正する） ──
+    isAttCriterion(id) {
+      return (this.courseForm.attendanceCriterionIds || []).indexOf(id) !== -1;
+    },
+    // チェックを切り替えると、課題の自動登録も合わせて付け外しする
+    toggleAttCriterion(cr) {
+      if (!Array.isArray(this.courseForm.attendanceCriterionIds)) this.courseForm.attendanceCriterionIds = [];
+      const ids = this.courseForm.attendanceCriterionIds;
+      const i = ids.indexOf(cr.id);
+      if (i !== -1) {
+        // 出席の項目から外す → 通常の課題として点数を入れられるようにする
+        ids.splice(i, 1);
+        if (!(this.courseForm.assignments || []).some(a => a.criterionId === cr.id)) {
+          if (!Array.isArray(this.courseForm.assignments)) this.courseForm.assignments = [];
+          this.courseForm.assignments.push({
+            id: this.uid(), name: cr.name, criterionId: cr.id,
+            deadline: '', maxScore: 100, memo: '', weight: null,
+          });
+        }
+      } else {
+        // 出席の項目にする → 出席の記録から自動計算するので、課題からは外す
+        ids.push(cr.id);
+        this.courseForm.assignments = (this.courseForm.assignments || []).filter(a => a.criterionId !== cr.id);
+      }
+      // 出席スケールの対象が外れたら付け替える／対象が無くなったら解除する
+      const sc = this.courseForm.attendanceScale;
+      if (sc) {
+        if (!ids.length) this.courseForm.attendanceScale = null;
+        else if (ids.indexOf(sc.criterionId) === -1) sc.criterionId = ids[0];
+      }
+      if (ids.length) this.courseForm.attendanceMatters = true;
+      this.attCritNeedsConfirm = false;
+    },
+    toggleAttMin(on) {
+      this.courseForm.attendanceMin = on ? this.normalizeAttMin({ mode: 'percent', percent: 70, meaning: 'required' }) : null;
+      if (on) this.courseForm.attendanceMatters = true;
+    },
+    // 授業登録フォームで出席ポリシーを追加。出席らしい成績基準があればそれを初期の対象にする
+    addFormDeduct() {
+      // 確認済みの「出席に関わる項目」があればそれを対象にする。無ければ名前から推測
+      const ids = this.courseForm.attendanceCriterionIds || [];
+      const cr = ids.length
+        ? (this.courseForm.gradingCriteria || []).find(c => c.id === ids[0])
+        : (this.courseForm.gradingCriteria || []).find(c => /attendance|attention|participation|出席|出欠|平常|参加/i.test(c.name || ''));
+      this.courseForm.attendanceDeduct = this.normalizeDeduct({
+        target: cr ? cr.id : 'overall', perAbsence: 2, lateMode: 'none', perLate: 0,
+      });
+      this.courseForm.attendanceMatters = true;
+    },
+    // ── 最低出席（これを下回ると評価対象外＝強制F） ──────────────
+    // attendanceMin: { mode:'percent'|'fraction'|'count', percent, num, den, count,
+    //                  meaning:'required'|'excluded' }
+    //   meaning='required' … その数値「以上の出席」が評価対象の条件
+    //   meaning='excluded' … その数値「以上の欠席」で評価対象外
+    normalizeAttMin(m) {
+      if (!m) return null;
+      return {
+        mode: m.mode || 'percent',
+        percent: (m.percent != null && m.percent !== '') ? +m.percent : 70,
+        num: (m.num != null && m.num !== '') ? +m.num : 2,
+        den: (m.den != null && m.den !== '') ? +m.den : 3,
+        count: (m.count != null && m.count !== '') ? +m.count : 0,
+        meaning: m.meaning || 'required',
+      };
+    },
+    // 許容される最大欠席回数。判定できないときは null
+    maxAllowedAbsences(course) {
+      const m = course && course.attendanceMin;
+      if (!m) return null;
+      const total = this.totalClasses(course) - (course.cancelledClasses || 0);
+      if (!(total > 0)) return null;
+      if (m.meaning === 'excluded') {
+        // 「n回（n%）以上の欠席で対象外」→ 許容はその1つ手前
+        let limit;
+        if (m.mode === 'count') limit = +m.count || 0;
+        else if (m.mode === 'fraction') limit = total * ((+m.num || 0) / (+m.den || 1));
+        else limit = total * ((+m.percent || 0) / 100);
+        return Math.max(0, Math.ceil(limit) - 1);
+      }
+      // 「n回（n%）以上の出席が必要」→ 必要回数は切り上げ、残りが許容欠席
+      let need;
+      if (m.mode === 'count') need = +m.count || 0;
+      else if (m.mode === 'fraction') need = total * ((+m.num || 0) / (+m.den || 1));
+      else need = total * ((+m.percent || 0) / 100);
+      return Math.max(0, total - Math.ceil(need - 1e-9));
+    },
+    // 評価対象外の判定に使う欠席回数。出席ポリシーの「遅刻n回で欠席1回」も含める
+    countedAbsences(course) {
+      return this.deductAbsences(course);
+    },
+    // あと何回休めるか（マイナスにはしない）。判定できないときは null
+    absencesLeft(course) {
+      const max = this.maxAllowedAbsences(course);
+      if (max === null) return null;
+      return Math.max(0, max - this.countedAbsences(course));
+    },
+    // 残り回数に応じたバッジの色（テンプレート内で "<" を書かずに済むようメソッド化）
+    attLeftClass(course) {
+      const n = this.absencesLeft(course);
+      if (n === 0) return 'bg-danger';
+      if (n === 1 || n === 2) return 'bg-warning text-dark';
+      return 'bg-secondary';
+    },
+    // すでに評価対象外か（＝強制的にF）
+    isAttendanceFailed(course) {
+      const max = this.maxAllowedAbsences(course);
+      if (max === null) return false;
+      return this.countedAbsences(course) > max;
+    },
     enableAttendanceDeduct(course) {
-      course.attendanceDeduct = { perAbsence: 2, perLate: 0 };
+      course.attendanceDeduct = this.normalizeDeduct({ perAbsence: 2, perLate: 0, target: 'overall', lateMode: 'none' });
       course.attendanceMatters = true;
       this.saveData();
     },
@@ -3298,15 +3756,15 @@ createApp({
       if (avg === null) return null;
       const earned = this.earnedSoFar(course);
       const remaining = 100 - this.coveredWeight(course);
-      return Math.max(0, earned + remaining * avg - this.attendanceDeductPoints(course));
+      return Math.max(0, earned + remaining * avg - this.overallDeductPoints(course));
     },
 
     bestCase(course) {
-      return Math.max(0, this.earnedSoFar(course) + (100 - this.coveredWeight(course)) - this.attendanceDeductPoints(course));
+      return Math.max(0, this.earnedSoFar(course) + (100 - this.coveredWeight(course)) - this.overallDeductPoints(course));
     },
 
     worstCase(course) {
-      return Math.max(0, this.earnedSoFar(course) - this.attendanceDeductPoints(course));
+      return Math.max(0, this.earnedSoFar(course) - this.overallDeductPoints(course));
     },
 
     effectiveScale(course) {
@@ -3326,10 +3784,12 @@ createApp({
 
     scoreToGrade(score, course) {
       if (score === null || score === undefined) return null;
+      const scale = this.effectiveScale(course);
+      // 最低出席を割った授業は点数に関係なく評価対象外＝最低評価
+      if (this.isAttendanceFailed(course)) return scale[scale.length - 1];
       // 四捨五入の指示がある授業のみ、満精度の合計点を四捨五入して判定（個々の点は丸めない）。
       // 指示がなければ厳密cutoff（例: 89.9% は B）。
       const s = (course && course.roundGrade) ? Math.round(score) : score;
-      const scale = this.effectiveScale(course);
       for (const g of scale) if (s >= g.min) return g;
       return scale[scale.length-1];
     },
@@ -3520,12 +3980,16 @@ createApp({
       if (period) {
         const toks = period.replace(/[<>()]/g, ',').split(/[,，]/);
         for (let tok of toks) {
-          tok = tok.trim().replace(/^\*+/, '');
-          const mm = tok.match(/^(\d+|Super[45])\/(M|TU|W|TH|F|SA|SU)$/i);
+          tok = tok.trim();
+          // 時限の数字の前に "*" が付くとSuper時限を表す（例: *4/F → 金曜のSuper4）。
+          // Super時限は4・5限だけなので、それ以外の数字に付いていた場合は "*" を無視して通常の時限として扱う
+          const mm = tok.match(/^(\**)(\d+|Super[45])\/(M|TU|W|TH|F|SA|SU)$/i);
           if (mm) {
             weekly++;
-            const di = dayMap[mm[2].toUpperCase()];
-            const per = /^\d+$/.test(mm[1]) ? mm[1] : 'Super' + mm[1].slice(-1);
+            const di = dayMap[mm[3].toUpperCase()];
+            const per = /^\d+$/.test(mm[2])
+              ? ((mm[1] && (mm[2] === '4' || mm[2] === '5')) ? 'Super' + mm[2] : mm[2])
+              : 'Super' + mm[2].slice(-1);
             if (di != null && !days.includes(di)) days.push(di);
             if (di != null && !cells.some(c => c.day === di && c.period === per)) cells.push({ day: di, period: per });
           }
@@ -3623,7 +4087,8 @@ createApp({
         term: this.currentTerm, weeklyClasses: 2, attendanceMatters: false,
         gradingCriteria: [], assignments: [], grades: [], completedCriteria: [],
         meetingDays: [], sessionStatus: {}, period: '', scheduleCells: [], calendarName: '', weeksOverride: null, totalClassesOverride: null,
-        absences: 0, lates: 0, cancelledClasses: 0, attendanceScale: null, attendanceDeduct: null,
+        absences: 0, lates: 0, cancelledClasses: 0, attendanceScale: null, attendanceDeduct: null, attendanceMin: null,
+        attendanceCriterionIds: [],
         syllabusText: '', attendanceAuto: '', attendanceUncertain: false,
         useCustomScale: false, gradeCutoffs: { A: 90, B: 80, C: 70, D: 60 }, roundGrade: false,
         courseCode: '', elaComp: '', actualGrade: null
@@ -3634,6 +4099,7 @@ createApp({
       this.newRoomInput = '';
       this.syllabusInput = 'text';
       this.syllabusStatus = '';
+      this.attCritNeedsConfirm = false;
       this.view = 'addCourse';
     },
 
@@ -3645,6 +4111,10 @@ createApp({
       if (f.syllabusText === undefined) f.syllabusText = '';
       if (f.lates === undefined) f.lates = 0;
       if (f.attendanceScale === undefined) f.attendanceScale = null;
+      f.attendanceDeduct = this.normalizeDeduct(f.attendanceDeduct);
+      f.attendanceMin = this.normalizeAttMin(f.attendanceMin);
+      if (!Array.isArray(f.attendanceCriterionIds)) f.attendanceCriterionIds = [];
+      this.attCritNeedsConfirm = false;
       if (f.attendanceUncertain === undefined) f.attendanceUncertain = false;
       if (!Array.isArray(f.meetingDays)) f.meetingDays = [];
       if (!f.sessionStatus || typeof f.sessionStatus !== 'object') f.sessionStatus = {};
@@ -3845,7 +4315,7 @@ createApp({
       }
       let attendanceDeduct = null;
       const ad = obj.attendanceDeduct;
-      if (ad && ((+ad.perAbsence || 0) > 0 || (+ad.perLate || 0) > 0)) attendanceDeduct = { perAbsence: +ad.perAbsence || 0, perLate: +ad.perLate || 0 };
+      if (ad && ((+ad.perAbsence || 0) > 0 || (+ad.perLate || 0) > 0)) attendanceDeduct = this.normalizeDeduct(ad);
       return {
         criteria,
         attendanceMatters: !!obj.attendanceMatters || !!attendanceScale || !!attendanceDeduct,
@@ -3901,13 +4371,18 @@ createApp({
         const sumR = Math.round(sumPct * 10) / 10;
         msgs.push(this.t('js.msgCriteria', r.criteria.length, sumR));
         if (sumR < 90 || sumR > 115) msgs.push(this.t('js.msgTotalOff'));
-        // 具体的な課題名を自動で「事前登録した課題」に追加（participation/attendance系は除外）
-        // 括弧内に名前付き内訳があれば、それぞれを個別課題＋重み(weight)として登録
+        // 出席に関わりそうな項目を名前から推測。あくまで推測なので、あとで利用者に確認・修正させる
+        // （紙面上はparticipationでも、実際の出席は別の項目に紐づいている授業があるため）
         const skipAssignRe = /(attendance|participation|出席|出欠|平常点|engagement|in[\-\s]?class)/i;
+        this.courseForm.attendanceCriterionIds = this.courseForm.gradingCriteria
+          .filter(c => skipAssignRe.test(c.name)).map(c => c.id);
+        this.attCritNeedsConfirm = true;
+        // 具体的な課題名を自動で「事前登録した課題」に追加（出席に関わる項目は除外）
+        // 括弧内に名前付き内訳があれば、それぞれを個別課題＋重み(weight)として登録
         const subMap = r.subAssignMap || {};
         const autoAssigns = [];
         for (const c of this.courseForm.gradingCriteria) {
-          if (skipAssignRe.test(c.name)) continue;
+          if (this.courseForm.attendanceCriterionIds.indexOf(c.id) !== -1) continue;
           const subs = subMap[c.name.toLowerCase()];
           if (subs && subs.length >= 2) {
             for (const s of subs) {
@@ -3936,6 +4411,11 @@ createApp({
         }) : null;
         const attCr = byName || this.courseForm.gradingCriteria.find(c => /attendance|attention|participation|出席|出欠|平常|参加/i.test(c.name));
         if (attCr) {
+          // スケールが紐づいた項目は出席に関わる項目として扱う（確認リストにも反映）
+          if (this.courseForm.attendanceCriterionIds.indexOf(attCr.id) === -1) {
+            this.courseForm.attendanceCriterionIds.push(attCr.id);
+            this.courseForm.assignments = (this.courseForm.assignments || []).filter(a => a.criterionId !== attCr.id);
+          }
           if (as.mode === 'perSession') {
             this.courseForm.attendanceScale = { criterionId: attCr.id, mode: 'perSession', pointsPresent: as.pointsPresent, pointsLate: as.pointsLate, pointsAbsent: as.pointsAbsent };
             this.courseForm.attendanceAuto = this.t('js.msgPerSessionDetected', as.pointsPresent, as.pointsLate, as.pointsAbsent, attCr.percentage);
@@ -3962,7 +4442,7 @@ createApp({
       if (r.roundGrade) msgs.push(this.t('js.msgRoundGrade'));
       // 出席による最終成績の減点（ATS型）
       this.courseForm.attendanceDeduct = (r.attendanceDeduct && ((+r.attendanceDeduct.perAbsence || 0) > 0 || (+r.attendanceDeduct.perLate || 0) > 0))
-        ? { perAbsence: +r.attendanceDeduct.perAbsence || 0, perLate: +r.attendanceDeduct.perLate || 0 } : null;
+        ? this.normalizeDeduct(r.attendanceDeduct) : null;
       if (this.courseForm.attendanceDeduct) { this.courseForm.attendanceMatters = true; msgs.push(this.t('js.msgAttDeduct', this.courseForm.attendanceDeduct.perAbsence)); }
       if (r.cutoffs) {
         const isDefault = r.cutoffs.A === 90 && r.cutoffs.B === 80 && r.cutoffs.C === 70 && r.cutoffs.D === 60;
@@ -4234,7 +4714,7 @@ createApp({
       let attendanceDeduct = null;
       {
         const dm = norm.match(/lose\s+(\d+(?:\.\d+)?)\s+points?\s+from\s+your\s+final\s+(?:grade|score)/i);
-        if (dm) attendanceDeduct = { perAbsence: parseFloat(dm[1]), perLate: 0 };
+        if (dm) attendanceDeduct = this.normalizeDeduct({ perAbsence: parseFloat(dm[1]), perLate: 0, target: 'overall', lateMode: 'none' });
       }
 
       return { criteria: dedup, attendanceMatters, attendanceReason, attendanceUncertain, cutoffs, attendanceScale, roundGrade, subAssignMap, attendanceDeduct };
@@ -5214,7 +5694,10 @@ createApp({
       if (c.weeksOverride != null && c.weeksOverride !== '') c.weeksOverride = +c.weeksOverride || null;
       if (c.totalClassesOverride != null && c.totalClassesOverride !== '') c.totalClassesOverride = +c.totalClassesOverride || null;
       c.weeklyClasses = +c.weeklyClasses || 1;
-      if (c.attendanceDeduct === undefined) c.attendanceDeduct = null;
+      // 旧形式（対象なし・全体からの減点のみ）を新形式へ移行
+      c.attendanceDeduct = this.normalizeDeduct(c.attendanceDeduct);
+      c.attendanceMin = this.normalizeAttMin(c.attendanceMin);
+      if (!Array.isArray(c.attendanceCriterionIds)) c.attendanceCriterionIds = [];
       if (c.period == null) c.period = '';
       if (c.calendarName == null) c.calendarName = '';
       if (!Array.isArray(c.scheduleCells)) {
